@@ -59,8 +59,38 @@ The picture above is about 300,000 cells running in real time on a single graphi
 
 Origin started from the cellular automata and neural-network particle work of **Fraser Price** ([@fraserpricee](https://x.com/fraserpricee)). His project was the spark; Origin takes the idea to a much larger scale.
 
-## About this repository
+## How it works
 
-This repository is a showcase. The source code and the desktop app are not published here. To explore the dish, visit [origindish.net](https://origindish.net).
+Every step, each cell:
 
-© 2026 origin. All rights reserved.
+1. **Senses** its surroundings: food here and ahead, waste, nearby family and strangers, calls from neighbours, its own energy and a little memory. That is 23 inputs.
+2. **Thinks** with a tiny neural network (up to 16 hidden neurons, 9 outputs).
+3. **Acts**: swims, turns, brakes, holds on to neighbours, bites, shares, calls out, and remembers.
+4. **Pays** for living, moving and thinking, and gains energy from what it eats. Cells next to family get a small food bonus, which is what makes bodies worth forming.
+5. **Divides** when it has enough energy. The daughter gets a copy of the brain with small random changes. That is the only source of new behaviour: nothing is designed, it is selected.
+
+Food grows in drifting patches that rise and fall with the seasons. Waste builds up where cells live and slowly poisons them. Hunters eat grazers, but bodies are harder to eat and can sting back.
+
+## The code
+
+```
+src/page.html    the page: layout, controls, drawing, story and charts
+src/core.js      the simulation on the processor (Small worlds)
+src/gpucore.js   the same rules as WebGPU compute shaders (Large and Huge worlds)
+src/chron.js     the chronicle: notices records, families and events as they happen
+src/worker.js    runs a world in a background worker and sends frames to the page
+build.py         joins it all into one file: build/index.html
+```
+
+## Run it yourself
+
+- **Easiest:** download `build/index.html` and open it in Chrome or Edge. It is a single file and runs offline. Large and Huge worlds need a browser with WebGPU.
+- **After changing the code:** run `python3 build.py`, then open `build/index.html` again.
+
+## Not included
+
+The Windows desktop app (the build that pushes past 300,000 cells) is not part of this repository.
+
+## Licence
+
+The code is released under the [MIT licence](LICENSE): use it, change it and share it, as long as the copyright notice comes along. The name origin, the logo and origindish.net are not part of that licence.
