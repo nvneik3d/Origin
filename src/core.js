@@ -61,7 +61,18 @@ function createWorld(opt = {}) {
   const hueDist = (a, b) => { const d = Math.abs(a - b) % 360; return d > 180 ? 360 - d : d; };
   const gi = (x, y) => { let ix = x | 0, iy = y | 0; if (ix < 0) ix = 0; else if (ix >= G) ix = G - 1; if (iy < 0) iy = 0; else if (iy >= G) iy = G - 1; return iy * G + ix; };
 
+  // sound mode: food grows only along the still lines of a vibrating plate (a Chladni pattern), one pattern per note
+  let pattern = null; const SHAKE = 0.12;
   function buildCap() {
+    if (pattern) {
+      const n = pattern.n, m = pattern.m, w = 0.5;
+      for (let y = 0; y < G; y++) for (let x = 0; x < G; x++) {
+        const u = (x + 0.5 - CX) / DR, v = (y + 0.5 - CY) / DR;
+        const a = Math.cos(n * Math.PI * u) * Math.cos(m * Math.PI * v) - Math.cos(m * Math.PI * u) * Math.cos(n * Math.PI * v);
+        cap[y * G + x] = wall[y * G + x] ? 0 : Math.min(1, 0.03 + Math.exp(-(a / w) * (a / w))) * C.FOOD_CAP;
+      }
+      return;
+    }
     for (let y = 0; y < G; y++) for (let x = 0; x < G; x++) {
       let s = 0.04;
       for (const b of blobs) { const dx = x - b.x, dy = y - b.y; s += Math.exp(-(dx * dx + dy * dy) / (2 * b.r * b.r)); }
@@ -226,6 +237,13 @@ function createWorld(opt = {}) {
       glue[i] += (Math.tanh(out[2]) - glue[i]) * C.GLUE_RATE; mem[i] = Math.tanh(out[7]); msg[i] = Math.tanh(out[8]);
       th[i] = th[i] + turn;
       let nvx = vx[i] + fx, nvy = vy[i] + fy;
+      // sound mode: the vibration nudges every cell towards the nearest still line, like sand on a plate
+      if (pattern) {
+        const u = (px[i] - CX) / DR, w = (py[i] - CY) / DR, n = pattern.n * Math.PI, m = pattern.m * Math.PI;
+        const cnu = Math.cos(n * u), cmw = Math.cos(m * w), cmu = Math.cos(m * u), cnw = Math.cos(n * w), a = cnu * cmw - cmu * cnw;
+        const gu = -n * Math.sin(n * u) * cmw + m * Math.sin(m * u) * cnw, gw = -m * cnu * Math.sin(m * w) + n * cmu * Math.sin(n * w);
+        const k = SHAKE * Math.max(-1, Math.min(1, a)) / (Math.hypot(gu, gw) + 1e-6); nvx -= k * gu; nvy -= k * gw;
+      }
       if (!braking) { nvx += Math.cos(th[i]) * thrust * C.THRUST; nvy += Math.sin(th[i]) * thrust * C.THRUST; }
       const drag = braking ? C.BRAKE_DRAG : C.DRAG; nvx *= drag; nvy *= drag;
       const sp = Math.hypot(nvx, nvy); if (sp > C.VMAX) { nvx *= C.VMAX / sp; nvy *= C.VMAX / sp; }
@@ -364,7 +382,10 @@ function createWorld(opt = {}) {
     nBonds = 0; for (let i = 0; i < MAX; i++) { if (!alive[i]) continue; for (let s = 0; s < nbp[i]; s++) { const j = bp[i * SL + s]; if (j > i && nBonds < BMAX) { bondA[nBonds] = i; bondB[nBonds] = j; nBonds++; } } }
   }
 
+  // a new note clears food that is no longer on the pattern, so the cells have to move to the new lines
+  function setPattern(p) { pattern = p && p.n > 0 && p.m > 0 && p.n !== p.m ? { n: p.n | 0, m: p.m | 0 } : null; buildCap(); if (pattern) for (let i = 0; i < CELLS; i++) if (food[i] > cap[i]) food[i] = cap[i]; }
   return {
+    setPattern, get pattern() { return pattern; },
     snapshot, restore,
     G, MAX, NI, NH, NO, NW, C, CX, CY, DR, params, exp,
     alive, px, py, vx, vy, th, energy, hue, age, gen, glue, speak, bonds, W, lastOut, food, cap, wall,

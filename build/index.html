@@ -148,6 +148,13 @@ a.round { text-decoration: none; }
 .sel .m { font: 12px var(--mono); color: var(--dim); }
 /* switches */
 .sw-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 14px; }
+.sndbox { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; border-radius: 20px; box-shadow: var(--press); }
+.sndbox input[type=range] { width: 100%; accent-color: var(--ink); }
+.sndinfo { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--dim); }
+.sndinfo b { font: 500 15px var(--mono); color: var(--ink); white-space: nowrap; }
+.sndinfo #sndNote { font-size: 12.5px; line-height: 1.3; }
+.sndinfo .grow { flex: 1; }
+.sndinfo button { height: 34px; padding: 0 14px; white-space: nowrap; flex: none; }
 .sw { width: 54px; height: 30px; flex: 0 0 54px; border-radius: 999px; border: 0; box-shadow: var(--press); background: var(--bg); position: relative; cursor: pointer; }
 .sw::after { content: ""; position: absolute; top: 5px; left: 5px; width: 20px; height: 20px; border-radius: 50%; background: var(--knob-off); transition: transform .18s ease, background .18s ease; }
 .sw[aria-checked="true"]::after { transform: translateX(24px); background: var(--knob); }
@@ -323,6 +330,12 @@ dialog.sheet h2 { margin: 0 0 14px; font: 900 24px var(--display); text-transfor
           <button type="button" class="round" id="bPause" aria-label="Pause"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M4.2 2 V12 M9.8 2 V12" stroke-width="2.4"></path></svg></button>
         </div>
         <div class="sw-row"><span class="label" style="margin:0">Speed</span><div class="speed" role="group" aria-label="Speed"><button type="button" data-sps="15" aria-pressed="false">½×</button><button type="button" data-sps="30" aria-pressed="true">1×</button><button type="button" data-sps="80" aria-pressed="false">Fast</button></div></div>
+        <div class="sw-row"><span class="label" style="margin:0">Sound</span><div class="speed" role="group" aria-label="Sound shapes where food grows"><button type="button" data-snd="off" aria-pressed="true">Off</button><button type="button" data-snd="tone" aria-pressed="false">Tone</button><button type="button" data-snd="mic" aria-pressed="false">Mic</button></div></div>
+        <div class="sndbox" id="sndBox" hidden>
+          <input type="range" id="sndPitch" min="0" max="10" step="1" value="0" aria-label="Pitch of the tone">
+          <div class="sndinfo"><b id="sndHz">123 Hz</b><span id="sndNote">B2 · pattern 2:1</span><button type="button" class="pill-btn" id="sndHear" style="margin-left:auto">Hear it</button></div>
+          <span class="label" id="sndHint" style="margin:0">Food grows only on the still lines of the vibrating dish. Change the note, change the shape.</span>
+        </div>
         <div class="skip"><span class="label" style="margin:0">Jump ahead</span><button type="button" id="bSkip">Skip 3,000 steps</button></div>
         <div class="keep" role="group" aria-label="Keep this world"><button type="button" id="bSave">Save world</button><button type="button" id="bLoad">Load</button><button type="button" id="bCode">World code</button></div>
         <input type="file" id="fileIn" accept=".json,application/json" hidden>
@@ -653,7 +666,18 @@ function createWorld(opt = {}) {
   const hueDist = (a, b) => { const d = Math.abs(a - b) % 360; return d > 180 ? 360 - d : d; };
   const gi = (x, y) => { let ix = x | 0, iy = y | 0; if (ix < 0) ix = 0; else if (ix >= G) ix = G - 1; if (iy < 0) iy = 0; else if (iy >= G) iy = G - 1; return iy * G + ix; };
 
+  // sound mode: food grows only along the still lines of a vibrating plate (a Chladni pattern), one pattern per note
+  let pattern = null; const SHAKE = 0.12;
   function buildCap() {
+    if (pattern) {
+      const n = pattern.n, m = pattern.m, w = 0.5;
+      for (let y = 0; y < G; y++) for (let x = 0; x < G; x++) {
+        const u = (x + 0.5 - CX) / DR, v = (y + 0.5 - CY) / DR;
+        const a = Math.cos(n * Math.PI * u) * Math.cos(m * Math.PI * v) - Math.cos(m * Math.PI * u) * Math.cos(n * Math.PI * v);
+        cap[y * G + x] = wall[y * G + x] ? 0 : Math.min(1, 0.03 + Math.exp(-(a / w) * (a / w))) * C.FOOD_CAP;
+      }
+      return;
+    }
     for (let y = 0; y < G; y++) for (let x = 0; x < G; x++) {
       let s = 0.04;
       for (const b of blobs) { const dx = x - b.x, dy = y - b.y; s += Math.exp(-(dx * dx + dy * dy) / (2 * b.r * b.r)); }
@@ -818,6 +842,13 @@ function createWorld(opt = {}) {
       glue[i] += (Math.tanh(out[2]) - glue[i]) * C.GLUE_RATE; mem[i] = Math.tanh(out[7]); msg[i] = Math.tanh(out[8]);
       th[i] = th[i] + turn;
       let nvx = vx[i] + fx, nvy = vy[i] + fy;
+      // sound mode: the vibration nudges every cell towards the nearest still line, like sand on a plate
+      if (pattern) {
+        const u = (px[i] - CX) / DR, w = (py[i] - CY) / DR, n = pattern.n * Math.PI, m = pattern.m * Math.PI;
+        const cnu = Math.cos(n * u), cmw = Math.cos(m * w), cmu = Math.cos(m * u), cnw = Math.cos(n * w), a = cnu * cmw - cmu * cnw;
+        const gu = -n * Math.sin(n * u) * cmw + m * Math.sin(m * u) * cnw, gw = -m * cnu * Math.sin(m * w) + n * cmu * Math.sin(n * w);
+        const k = SHAKE * Math.max(-1, Math.min(1, a)) / (Math.hypot(gu, gw) + 1e-6); nvx -= k * gu; nvy -= k * gw;
+      }
       if (!braking) { nvx += Math.cos(th[i]) * thrust * C.THRUST; nvy += Math.sin(th[i]) * thrust * C.THRUST; }
       const drag = braking ? C.BRAKE_DRAG : C.DRAG; nvx *= drag; nvy *= drag;
       const sp = Math.hypot(nvx, nvy); if (sp > C.VMAX) { nvx *= C.VMAX / sp; nvy *= C.VMAX / sp; }
@@ -956,7 +987,10 @@ function createWorld(opt = {}) {
     nBonds = 0; for (let i = 0; i < MAX; i++) { if (!alive[i]) continue; for (let s = 0; s < nbp[i]; s++) { const j = bp[i * SL + s]; if (j > i && nBonds < BMAX) { bondA[nBonds] = i; bondB[nBonds] = j; nBonds++; } } }
   }
 
+  // a new note clears food that is no longer on the pattern, so the cells have to move to the new lines
+  function setPattern(p) { pattern = p && p.n > 0 && p.m > 0 && p.n !== p.m ? { n: p.n | 0, m: p.m | 0 } : null; buildCap(); if (pattern) for (let i = 0; i < CELLS; i++) if (food[i] > cap[i]) food[i] = cap[i]; }
   return {
+    setPattern, get pattern() { return pattern; },
     snapshot, restore,
     G, MAX, NI, NH, NO, NW, C, CX, CY, DR, params, exp,
     alive, px, py, vx, vy, th, energy, hue, age, gen, glue, speak, bonds, W, lastOut, food, cap, wall,
@@ -998,7 +1032,7 @@ async function createGpuWorld(opt = {}) {
     'fx:f', 'fy:f', 'fr:f', 'dr:f', 'baseCost:f', 'moveCost:f', 'turnCost:f', 'eat:f', 'repro:f', 'hRepro:f', 'maxAge:f', 'foodCap:f',
     'kinBonus:f', 'thrust:f', 'turn:f', 'drag:f', 'brakeDrag:f', 'vmax:f', 'push:f', 'glueK:f', 'mutP:f', 'mutSd:f', 'wasteMake:f', 'wasteEat:f',
     'wasteDecay:f', 'wasteHarm:f', 'wasteCap:f', 'room:f', 'neuronCost:f', 'brainMut:f', 'seasonLen:f', 'seasonAmp:f', 'armour:f', 'hGain:f', 'hMeat:f', 'hTry:f',
-    'shield:f', 'sting:f', 'stingCost:f', 'regen:f', 'startNh:f', 'cells:f', 'bondK:f', 'bondRest:f', 'bondBreak:f', 'gap:f', 'letGo:f', 'glueRate:f', 'sizeShield:f', 'kinCap:f'];
+    'shield:f', 'sting:f', 'stingCost:f', 'regen:f', 'startNh:f', 'cells:f', 'bondK:f', 'bondRest:f', 'bondBreak:f', 'gap:f', 'letGo:f', 'glueRate:f', 'sizeShield:f', 'kinCap:f', 'shN:f', 'shM:f', 'shK:f'];
   const PIDX = {}; PF.forEach((p, i) => PIDX[p.split(':')[0]] = i);
   const PU = new ArrayBuffer(Math.ceil(PF.length / 4) * 16), PUu = new Uint32Array(PU), PUf = new Float32Array(PU);
   const struct = 'struct P {\n' + PF.map(p => { const [n, t] = p.split(':'); return `  ${n}: ${t === 'u' ? 'u32' : 'f32'},`; }).join('\n') + '\n' +
@@ -1184,6 +1218,14 @@ fn ws(i: u32) -> f32 { return fld[i * 2u + 1u]; }
   a.glue = a.glue + (sth(outp[2]) - a.glue) * p.glueRate; a.mem = sth(outp[7]); a.msg = sth(outp[8]); a.held = nHeld; a.kin = kinN;
   a.th = h + turn;
   var v = a.vel + vec2<f32>(fx, fy);
+  // sound mode: the vibration nudges every cell towards the nearest still line, like sand on a plate
+  if (p.shK > 0.0) {
+    let q = (a.pos - vec2<f32>(f32(p.G) * 0.5)) / p.dr; let n = p.shN * 3.14159265; let m = p.shM * 3.14159265;
+    let cnu = cos(n * q.x); let cmw = cos(m * q.y); let cmu = cos(m * q.x); let cnw = cos(n * q.y);
+    let aa = cnu * cmw - cmu * cnw;
+    let gr = vec2<f32>(-n * sin(n * q.x) * cmw + m * sin(m * q.x) * cnw, -m * cnu * sin(m * q.y) + n * cmu * sin(n * q.y));
+    v -= p.shK * clamp(aa, -1.0, 1.0) * gr / (length(gr) + 1e-6);
+  }
   if (!braking) { v += vec2<f32>(cos(a.th), sin(a.th)) * thrust * p.thrust; }
   v *= select(p.drag, p.brakeDrag, braking);
   let sp = length(v); if (sp > p.vmax) { v *= p.vmax / sp; }
@@ -1353,7 +1395,19 @@ fn ws(i: u32) -> f32 { return fld[i * 2u + 1u]; }
   const nKind = [0, 0];
   let seed = 1;
   function rand() { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }
+  // sound mode: food grows only along the still lines of a vibrating plate (a Chladni pattern), one pattern per note
+  let pattern = null;
   function buildCap() {
+    if (pattern) {
+      const n = pattern.n, m = pattern.m, w = 0.5;
+      for (let y = 0; y < G; y++) for (let x = 0; x < G; x++) {
+        const u = (x + 0.5 - CX) / DR, v = (y + 0.5 - CY) / DR;
+        const a = Math.cos(n * Math.PI * u) * Math.cos(m * Math.PI * v) - Math.cos(m * Math.PI * u) * Math.cos(n * Math.PI * v);
+        cap[y * G + x] = wall[y * G + x] ? 0 : Math.min(1, 0.03 + Math.exp(-(a / w) * (a / w))) * C.FOOD_CAP;
+      }
+      Q.writeBuffer(B.cap, 0, cap);
+      return;
+    }
     for (let y = 0; y < G; y++) for (let x = 0; x < G; x++) {
       let s = 0.04;
       for (const b of blobs) { const dx = x - b.x, dy = y - b.y; s += Math.exp(-(dx * dx + dy * dy) / (2 * b.r * b.r)); }
@@ -1380,7 +1434,7 @@ fn ws(i: u32) -> f32 { return fld[i * 2u + 1u]; }
     setF('mutP', params.mut); setF('mutSd', C.MUT_SD); setF('wasteMake', C.WASTE_MAKE); setF('wasteEat', C.WASTE_EAT); setF('wasteDecay', C.WASTE_DECAY); setF('wasteHarm', C.WASTE_HARM); setF('wasteCap', C.WASTE_CAP); setF('room', C.ROOM);
     setF('neuronCost', C.NEURON_COST); setF('brainMut', C.BRAIN_MUT); setF('seasonLen', C.SEASON); setF('seasonAmp', C.SEASON_AMP); setF('armour', C.ARMOUR); setF('hGain', C.H_GAIN); setF('hMeat', C.H_MEAT); setF('hTry', C.H_TRY);
     setF('shield', C.SHIELD); setF('sting', C.STING); setF('stingCost', C.STING_COST); setF('regen', 0.012 * params.food); setF('startNh', C.START_NH); setF('cells', CELLS);
-    setF('bondK', C.BOND_K); setF('bondRest', C.BOND_REST); setF('bondBreak', C.BOND_BREAK); setF('gap', C.GAP); setF('letGo', C.LETGO); setF('glueRate', C.GLUE_RATE); setF('sizeShield', C.SIZE_SHIELD); setF('kinCap', C.KIN_CAP);
+    setF('bondK', C.BOND_K); setF('bondRest', C.BOND_REST); setF('bondBreak', C.BOND_BREAK); setF('gap', C.GAP); setF('letGo', C.LETGO); setF('glueRate', C.GLUE_RATE); setF('sizeShield', C.SIZE_SHIELD); setF('shN', pattern ? pattern.n : 0); setF('shM', pattern ? pattern.m : 0); setF('shK', pattern ? 0.12 : 0); setF('kinCap', C.KIN_CAP);
     Q.writeBuffer(B.P, 0, PU);
   }
   let spawnCount = 0;
@@ -1525,7 +1579,13 @@ fn ws(i: u32) -> f32 { return fld[i * 2u + 1u]; }
     const e = dev.createCommandEncoder(); e.copyBufferToBuffer(B.W, i * NW * 4, RB.W, 0, NW * 4); Q.submit([e.finish()]);
     await RB.W.mapAsync(GPUMapMode.READ); const w = new Float32Array(RB.W.getMappedRange()).slice(); RB.W.unmap(); return w;
   }
+  // a new note clears food that is no longer on the pattern (using the last copy of the jelly; close enough)
+  function setPattern(p) {
+    pattern = p && p.n > 0 && p.m > 0 && p.n !== p.m ? { n: p.n | 0, m: p.m | 0 } : null; buildCap();
+    if (pattern) { const f = new Int32Array(CELLS); for (let i = 0; i < CELLS; i++) { const v = Math.min(food[i], cap[i]); food[i] = v; f[i] = Math.round(v * 1000); } Q.writeBuffer(B.fd, 0, f); }
+  }
   return {
+    setPattern, get pattern() { return pattern; },
     gpu: true, adapterName: (adapter.info && (adapter.info.description || adapter.info.vendor)) || '',
     G, MAX, NI, NH, NO, NW, C, CX, CY, DR, params, exp,
     alive, px, py, hue, glue, energy, speak, kind, gen, age, nh, held, msg, mem, food, waste, cap, wall, lin, linPar, linHue, linBorn, linKind, bsize,
@@ -1755,6 +1815,7 @@ onmessage = async e => {
     } else { w = createWorld({ G: m.G, C: m.C }); if (m.exp) Object.assign(w.exp, m.exp); ch = createChronicle(w); w.reset(m.seed); lastT = rateT = performance.now(); postMessage({ type: 'ready', gpu: false }); loop(); }
   }
   else if (!w) return;
+  else if (m.type === 'pattern') { if (w.setPattern) w.setPattern(m.pattern); }
   else if (m.type === 'set') { if ('paused' in m) paused = m.paused; if ('sps' in m) sps = m.sps; for (const k of ['glue', 'memory', 'waste', 'seasons', 'hunters', 'fightBack']) if (k in m) w.exp[k] = m[k]; }
   else if (m.type === 'new') { skipLeft = 0; w.reset(m.seed); ch.reset(); sel = -1; lastStats = 0; lastFood = 0; lastHist = 0; }
   else if (m.type === 'feed') w.feed(m.x, m.y, m.r);
@@ -1850,6 +1911,7 @@ onmessage = async e => {
     el('worldNote').textContent = cfg.gpu ? 'starting on your graphics card…' : 'running on your processor';
     wk = new Worker(srcURL); wk.onmessage = onWorker;
     wk.postMessage({ type: 'init', G, MAX: cfg.MAX, gpu: cfg.gpu, seed: seed != null ? seed >>> 0 : (Math.random() * 1e9) >>> 0 });
+    if (typeof sndPattern !== 'undefined' && sndPattern) wk.postMessage({ type: 'pattern', pattern: sndPattern });
   }
 
   // ---------- canvas + camera ----------
@@ -2592,6 +2654,64 @@ onmessage = async e => {
     else if (b.closest('.speed, .duo') || b.hasAttribute('aria-pressed') || id === 'themeBtn') sfx('tick');
     else sfx('tap');
   }, true);
+  // ---------- sound mode: a note sets which Chladni pattern the food grows in ----------
+  // every pattern is a pair (n, m); its pitch rises with sqrt(n^2 + m^2), like the modes of a real vibrating plate
+  const SND_MODES = []; for (let n = 2; n <= 12; n++) for (let m = 1; m < n; m++) SND_MODES.push({ n, m, hz: Math.round(55 * Math.sqrt(n * n + m * m)) });
+  SND_MODES.sort((a, b) => a.hz - b.hz || a.n - b.n);
+  const NOTE = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+  const noteOf = f => { const k = Math.round(12 * Math.log2(f / 440)) + 57; return NOTE[((k % 12) + 12) % 12] + Math.floor(k / 12); };
+  let sndMode = 'off', sndIdx = 0, sndPattern = null, sndOsc = null, sndGain = null, sndHear = false, mic = null, micTimer = 0, micLast = -1, micSame = 0;
+  el('sndPitch').max = SND_MODES.length - 1;
+  function sndShow() {
+    const md = SND_MODES[sndIdx]; el('sndPitch').value = sndIdx;
+    el('sndHz').textContent = md.hz + ' Hz'; el('sndNote').textContent = noteOf(md.hz) + ' · pattern ' + md.n + ':' + md.m;
+  }
+  function sndApply() {
+    sndPattern = sndMode === 'off' ? null : { n: SND_MODES[sndIdx].n, m: SND_MODES[sndIdx].m };
+    if (wk) wk.postMessage({ type: 'pattern', pattern: sndPattern });
+    if (sndOsc) sndOsc.frequency.setTargetAtTime(SND_MODES[sndIdx].hz, ac().currentTime, 0.05);
+  }
+  function sndToneStop() { if (sndOsc) { try { sndGain.gain.setTargetAtTime(0, ac().currentTime, 0.05); const o = sndOsc; setTimeout(() => o.stop(), 300); } catch (e) {} sndOsc = null; } }
+  function sndToneStart() {
+    const c = ac(); if (!c || sndOsc) return;
+    sndOsc = c.createOscillator(); sndGain = c.createGain(); sndOsc.type = 'sine'; sndOsc.frequency.value = SND_MODES[sndIdx].hz;
+    sndGain.gain.value = 0; sndGain.gain.setTargetAtTime(0.09, c.currentTime, 0.08); sndOsc.connect(sndGain); sndGain.connect(master); sndOsc.start();
+  }
+  function micStop() { clearInterval(micTimer); micTimer = 0; if (mic) { mic.stream.getTracks().forEach(t => t.stop()); try { mic.src.disconnect(); } catch (e) {} mic = null; } }
+  async function micStart() {
+    const c = ac(); if (!c || !navigator.mediaDevices) { toast("This browser can't use a microphone."); setSnd('off'); return; }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+      const src = c.createMediaStreamSource(stream), an = c.createAnalyser(); an.fftSize = 8192; an.smoothingTimeConstant = 0.6; src.connect(an);
+      mic = { stream, src, an, buf: new Float32Array(an.frequencyBinCount) };
+      el('sndHz').textContent = 'listening…'; el('sndNote').textContent = 'hum, whistle or play a note';
+      micTimer = setInterval(micTick, 120);
+    } catch (e) { toast('Microphone access was blocked, so sound mode is off.'); setSnd('off'); }
+  }
+  // the loudest pitch between 80 and 1,000 Hz picks the nearest pattern; it has to hold for a moment to switch
+  function micTick() {
+    if (!mic) return; const an = mic.an, b = mic.buf; an.getFloatFrequencyData(b);
+    const hzPer = ac().sampleRate / an.fftSize, lo = Math.floor(80 / hzPer), hi = Math.ceil(1000 / hzPer);
+    let best = -1, bv = -Infinity; for (let i = lo; i <= hi; i++) if (b[i] > bv) { bv = b[i]; best = i; }
+    if (bv < -62 || best < 0) return;
+    const f = best * hzPer; let k = 0, d = Infinity; SND_MODES.forEach((md, i) => { const e = Math.abs(Math.log(md.hz / f)); if (e < d) { d = e; k = i; } });
+    if (k === micLast) micSame++; else { micLast = k; micSame = 0; }
+    el('sndHz').textContent = Math.round(f) + ' Hz';
+    if (micSame === 2 && k !== sndIdx) { sndIdx = k; el('sndPitch').value = k; el('sndNote').textContent = noteOf(f) + ' · pattern ' + SND_MODES[k].n + ':' + SND_MODES[k].m; sndApply(); }
+  }
+  function setSnd(mode) {
+    sndMode = mode; segSync('snd', mode); el('sndBox').hidden = mode === 'off';
+    el('sndPitch').disabled = mode === 'mic'; el('sndHear').hidden = mode !== 'tone';
+    micStop(); if (mode !== 'tone' || !sndHear) sndToneStop();
+    if (mode === 'tone') { sndShow(); if (sndHear && soundOn) sndToneStart(); }
+    if (mode === 'mic') micStart();
+    sndApply();
+  }
+  document.querySelectorAll('[data-snd]').forEach(b => b.onclick = () => { if (b.dataset.snd !== sndMode) setSnd(b.dataset.snd); });
+  el('sndPitch').oninput = () => { sndIdx = +el('sndPitch').value; sndShow(); sndApply(); };
+  el('sndHear').onclick = () => { sndHear = !sndHear; el('sndHear').textContent = sndHear ? 'Mute' : 'Hear it'; if (sndHear) { if (!soundOn) el('soundBtn').click(); sndToneStart(); } else sndToneStop(); };
+  sndIdx = 3; sndShow();
+  el('soundBtn').addEventListener('click', () => setTimeout(() => { if (!soundOn && sndOsc) { sndToneStop(); sndHear = false; el('sndHear').textContent = 'Hear it'; } }, 0));
   el('soundBtn').onclick = () => { soundOn = !soundOn; el('soundBtn').setAttribute('aria-pressed', soundOn); el('soundBtn').setAttribute('aria-label', soundOn ? 'Sounds on' : 'Sounds off'); try { localStorage.setItem('fd-sound', soundOn ? 'on' : 'off'); } catch (e) {} if (soundOn) sfx('on'); };
   el('soundBtn').setAttribute('aria-pressed', soundOn); el('soundBtn').setAttribute('aria-label', soundOn ? 'Sounds on' : 'Sounds off');
 

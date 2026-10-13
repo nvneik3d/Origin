@@ -28,7 +28,7 @@ async function createGpuWorld(opt = {}) {
     'fx:f', 'fy:f', 'fr:f', 'dr:f', 'baseCost:f', 'moveCost:f', 'turnCost:f', 'eat:f', 'repro:f', 'hRepro:f', 'maxAge:f', 'foodCap:f',
     'kinBonus:f', 'thrust:f', 'turn:f', 'drag:f', 'brakeDrag:f', 'vmax:f', 'push:f', 'glueK:f', 'mutP:f', 'mutSd:f', 'wasteMake:f', 'wasteEat:f',
     'wasteDecay:f', 'wasteHarm:f', 'wasteCap:f', 'room:f', 'neuronCost:f', 'brainMut:f', 'seasonLen:f', 'seasonAmp:f', 'armour:f', 'hGain:f', 'hMeat:f', 'hTry:f',
-    'shield:f', 'sting:f', 'stingCost:f', 'regen:f', 'startNh:f', 'cells:f', 'bondK:f', 'bondRest:f', 'bondBreak:f', 'gap:f', 'letGo:f', 'glueRate:f', 'sizeShield:f', 'kinCap:f'];
+    'shield:f', 'sting:f', 'stingCost:f', 'regen:f', 'startNh:f', 'cells:f', 'bondK:f', 'bondRest:f', 'bondBreak:f', 'gap:f', 'letGo:f', 'glueRate:f', 'sizeShield:f', 'kinCap:f', 'shN:f', 'shM:f', 'shK:f'];
   const PIDX = {}; PF.forEach((p, i) => PIDX[p.split(':')[0]] = i);
   const PU = new ArrayBuffer(Math.ceil(PF.length / 4) * 16), PUu = new Uint32Array(PU), PUf = new Float32Array(PU);
   const struct = 'struct P {\n' + PF.map(p => { const [n, t] = p.split(':'); return `  ${n}: ${t === 'u' ? 'u32' : 'f32'},`; }).join('\n') + '\n' +
@@ -214,6 +214,14 @@ fn ws(i: u32) -> f32 { return fld[i * 2u + 1u]; }
   a.glue = a.glue + (sth(outp[2]) - a.glue) * p.glueRate; a.mem = sth(outp[7]); a.msg = sth(outp[8]); a.held = nHeld; a.kin = kinN;
   a.th = h + turn;
   var v = a.vel + vec2<f32>(fx, fy);
+  // sound mode: the vibration nudges every cell towards the nearest still line, like sand on a plate
+  if (p.shK > 0.0) {
+    let q = (a.pos - vec2<f32>(f32(p.G) * 0.5)) / p.dr; let n = p.shN * 3.14159265; let m = p.shM * 3.14159265;
+    let cnu = cos(n * q.x); let cmw = cos(m * q.y); let cmu = cos(m * q.x); let cnw = cos(n * q.y);
+    let aa = cnu * cmw - cmu * cnw;
+    let gr = vec2<f32>(-n * sin(n * q.x) * cmw + m * sin(m * q.x) * cnw, -m * cnu * sin(m * q.y) + n * cmu * sin(n * q.y));
+    v -= p.shK * clamp(aa, -1.0, 1.0) * gr / (length(gr) + 1e-6);
+  }
   if (!braking) { v += vec2<f32>(cos(a.th), sin(a.th)) * thrust * p.thrust; }
   v *= select(p.drag, p.brakeDrag, braking);
   let sp = length(v); if (sp > p.vmax) { v *= p.vmax / sp; }
@@ -383,7 +391,19 @@ fn ws(i: u32) -> f32 { return fld[i * 2u + 1u]; }
   const nKind = [0, 0];
   let seed = 1;
   function rand() { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }
+  // sound mode: food grows only along the still lines of a vibrating plate (a Chladni pattern), one pattern per note
+  let pattern = null;
   function buildCap() {
+    if (pattern) {
+      const n = pattern.n, m = pattern.m, w = 0.5;
+      for (let y = 0; y < G; y++) for (let x = 0; x < G; x++) {
+        const u = (x + 0.5 - CX) / DR, v = (y + 0.5 - CY) / DR;
+        const a = Math.cos(n * Math.PI * u) * Math.cos(m * Math.PI * v) - Math.cos(m * Math.PI * u) * Math.cos(n * Math.PI * v);
+        cap[y * G + x] = wall[y * G + x] ? 0 : Math.min(1, 0.03 + Math.exp(-(a / w) * (a / w))) * C.FOOD_CAP;
+      }
+      Q.writeBuffer(B.cap, 0, cap);
+      return;
+    }
     for (let y = 0; y < G; y++) for (let x = 0; x < G; x++) {
       let s = 0.04;
       for (const b of blobs) { const dx = x - b.x, dy = y - b.y; s += Math.exp(-(dx * dx + dy * dy) / (2 * b.r * b.r)); }
@@ -410,7 +430,7 @@ fn ws(i: u32) -> f32 { return fld[i * 2u + 1u]; }
     setF('mutP', params.mut); setF('mutSd', C.MUT_SD); setF('wasteMake', C.WASTE_MAKE); setF('wasteEat', C.WASTE_EAT); setF('wasteDecay', C.WASTE_DECAY); setF('wasteHarm', C.WASTE_HARM); setF('wasteCap', C.WASTE_CAP); setF('room', C.ROOM);
     setF('neuronCost', C.NEURON_COST); setF('brainMut', C.BRAIN_MUT); setF('seasonLen', C.SEASON); setF('seasonAmp', C.SEASON_AMP); setF('armour', C.ARMOUR); setF('hGain', C.H_GAIN); setF('hMeat', C.H_MEAT); setF('hTry', C.H_TRY);
     setF('shield', C.SHIELD); setF('sting', C.STING); setF('stingCost', C.STING_COST); setF('regen', 0.012 * params.food); setF('startNh', C.START_NH); setF('cells', CELLS);
-    setF('bondK', C.BOND_K); setF('bondRest', C.BOND_REST); setF('bondBreak', C.BOND_BREAK); setF('gap', C.GAP); setF('letGo', C.LETGO); setF('glueRate', C.GLUE_RATE); setF('sizeShield', C.SIZE_SHIELD); setF('kinCap', C.KIN_CAP);
+    setF('bondK', C.BOND_K); setF('bondRest', C.BOND_REST); setF('bondBreak', C.BOND_BREAK); setF('gap', C.GAP); setF('letGo', C.LETGO); setF('glueRate', C.GLUE_RATE); setF('sizeShield', C.SIZE_SHIELD); setF('shN', pattern ? pattern.n : 0); setF('shM', pattern ? pattern.m : 0); setF('shK', pattern ? 0.12 : 0); setF('kinCap', C.KIN_CAP);
     Q.writeBuffer(B.P, 0, PU);
   }
   let spawnCount = 0;
@@ -555,7 +575,13 @@ fn ws(i: u32) -> f32 { return fld[i * 2u + 1u]; }
     const e = dev.createCommandEncoder(); e.copyBufferToBuffer(B.W, i * NW * 4, RB.W, 0, NW * 4); Q.submit([e.finish()]);
     await RB.W.mapAsync(GPUMapMode.READ); const w = new Float32Array(RB.W.getMappedRange()).slice(); RB.W.unmap(); return w;
   }
+  // a new note clears food that is no longer on the pattern (using the last copy of the jelly; close enough)
+  function setPattern(p) {
+    pattern = p && p.n > 0 && p.m > 0 && p.n !== p.m ? { n: p.n | 0, m: p.m | 0 } : null; buildCap();
+    if (pattern) { const f = new Int32Array(CELLS); for (let i = 0; i < CELLS; i++) { const v = Math.min(food[i], cap[i]); food[i] = v; f[i] = Math.round(v * 1000); } Q.writeBuffer(B.fd, 0, f); }
+  }
   return {
+    setPattern, get pattern() { return pattern; },
     gpu: true, adapterName: (adapter.info && (adapter.info.description || adapter.info.vendor)) || '',
     G, MAX, NI, NH, NO, NW, C, CX, CY, DR, params, exp,
     alive, px, py, hue, glue, energy, speak, kind, gen, age, nh, held, msg, mem, food, waste, cap, wall, lin, linPar, linHue, linBorn, linKind, bsize,
