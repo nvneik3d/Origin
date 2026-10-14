@@ -28,7 +28,7 @@ async function createGpuWorld(opt = {}) {
     'fx:f', 'fy:f', 'fr:f', 'dr:f', 'baseCost:f', 'moveCost:f', 'turnCost:f', 'eat:f', 'repro:f', 'hRepro:f', 'maxAge:f', 'foodCap:f',
     'kinBonus:f', 'thrust:f', 'turn:f', 'drag:f', 'brakeDrag:f', 'vmax:f', 'push:f', 'glueK:f', 'mutP:f', 'mutSd:f', 'wasteMake:f', 'wasteEat:f',
     'wasteDecay:f', 'wasteHarm:f', 'wasteCap:f', 'room:f', 'neuronCost:f', 'brainMut:f', 'seasonLen:f', 'seasonAmp:f', 'armour:f', 'hGain:f', 'hMeat:f', 'hTry:f',
-    'shield:f', 'sting:f', 'stingCost:f', 'regen:f', 'startNh:f', 'cells:f', 'bondK:f', 'bondRest:f', 'bondBreak:f', 'gap:f', 'letGo:f', 'glueRate:f', 'sizeShield:f', 'kinCap:f', 'shN:f', 'shM:f', 'shK:f'];
+    'shield:f', 'sting:f', 'stingCost:f', 'regen:f', 'startNh:f', 'cells:f', 'bondK:f', 'bondRest:f', 'bondBreak:f', 'gap:f', 'letGo:f', 'glueRate:f', 'sizeShield:f', 'kinCap:f', 'shN:f', 'shM:f', 'shK:f', 'csz:f', 'reach:u'];
   const PIDX = {}; PF.forEach((p, i) => PIDX[p.split(':')[0]] = i);
   const PU = new ArrayBuffer(Math.ceil(PF.length / 4) * 16), PUu = new Uint32Array(PU), PUf = new Float32Array(PU);
   const struct = 'struct P {\n' + PF.map(p => { const [n, t] = p.split(':'); return `  ${n}: ${t === 'u' ? 'u32' : 'f32'},`; }).join('\n') + '\n' +
@@ -147,7 +147,7 @@ fn ws(i: u32) -> f32 { return fld[i * 2u + 1u]; }
   if (on(8u) && a.lastCell >= 0.0) { inp[1] = clamp((f32(atomicLoad(&fd[c])) - f32(atomicLoad(&fd[u32(a.lastCell)]))) / 1000.0 / p.foodCap * 6.0, -1.0, 1.0); }
   if (p.tick % 4u == 0u) { a.lastCell = f32(c); }
   for (var d = 0u; d < 4u; d++) {
-    let an = h + f32(d) * 1.5708; let sc = cellOf(x + cos(an) * 1.6, y + sin(an) * 1.6);
+    let an = h + f32(d) * 1.5708; let sc = cellOf(x + cos(an) * 1.6 * p.csz, y + sin(an) * 1.6 * p.csz);
     if (on(2u)) { inp[13u + d] = min(1.0, sg(sc) * 2.0); }
   }
   var nb4 = vec4<f32>(0.0); var oth4 = vec4<f32>(0.0);
@@ -173,21 +173,21 @@ fn ws(i: u32) -> f32 { return fld[i * 2u + 1u]; }
     }
     a.nb = nk; for (var s = 0u; s < ${SL}u; s++) { a.bp[s] = select(0xffffffffu, keep[s], s < nk); }
   }
-  let bx0 = i32(x / ${BS}.0) - 1; let by0 = i32(y / ${BS}.0) - 1;
-  for (var by = by0; by <= by0 + 2; by++) { for (var bx = bx0; bx <= bx0 + 2; bx++) {
+  let rch = i32(p.reach); let bx0 = i32(x / ${BS}.0) - rch; let by0 = i32(y / ${BS}.0) - rch;
+  for (var by = by0; by <= by0 + 2 * rch; by++) { for (var bx = bx0; bx <= bx0 + 2 * rch; bx++) {
     if (bx < 0 || by < 0 || bx >= i32(p.HB) || by >= i32(p.HB)) { continue; }
     let b = u32(by) * p.HB + u32(bx); let n = min(atomicLoad(&bk[b]), p.BK);
     for (var s = 0u; s < n; s++) {
       let j = atomicLoad(&bk[p.HB * p.HB + b * p.BK + s]); if (j == i) { continue; }
-      let o = prv[j]; let dx = o.pos.x - x; let dy = o.pos.y - y; let d2 = dx * dx + dy * dy; if (d2 >= 4.0) { continue; }
-      let dd = sqrt(d2) + 1e-6; let same = o.kind == kd; let kin = same && hueDist(o.hue, a.hue) < 25.0;
+      let o = prv[j]; let dx = o.pos.x - x; let dy = o.pos.y - y; let d2 = dx * dx + dy * dy; if (d2 >= 4.0 * p.csz * p.csz) { continue; }
+      let dr = sqrt(d2) + 1e-6; let dd = dr / p.csz; let same = o.kind == kd; let kin = same && hueDist(o.hue, a.hue) < 25.0;
       let fwd = dx * ch + dy * sh; let side = -dx * sh + dy * ch;
       var q = 0u; if (abs(fwd) >= abs(side)) { q = select(2u, 0u, fwd >= 0.0); } else { q = select(3u, 1u, side >= 0.0); }
       let w = 1.0 - dd / 2.0; if (same) { nb4[q] += select(-w, w, kin); } else { oth4[q] += w; }
-      if (dd < 1.0) { let pp = (1.0 - dd) * p.push; fx -= dx / dd * pp; fy -= dy / dd * pp; }
+      if (dd < 1.0) { let pp = (1.0 - dd) * p.push; fx -= dx / dr * pp; fy -= dy / dr * pp; }
       if (kin && dd < 1.45) { kinN++; if (nKin < 8u) { kinList[nKin] = i32(j); nKin++; } }
       if (kin && on(4u) && dd < 1.95 && a.glue > 0.0 && o.glue > 0.0) {
-        let gg = min(a.glue, o.glue) * p.glueK * (dd - 1.0); fx += dx / dd * gg; fy += dy / dd * gg;
+        let gg = min(a.glue, o.glue) * p.glueK * (dd - 1.0); fx += dx / dr * gg; fy += dy / dr * gg;
         if (on(1024u)) {
           // touching family who both want to stick form a lasting attachment (both sides decide the same way)
           if (on(2048u) && dd < 1.1 && a.nb < ${SL}u && o.nb < ${SL}u) { var have = false; for (var t = 0u; t < a.nb; t++) { if (a.bp[t] == j) { have = true; } } if (!have) { a.bp[a.nb] = j; a.nb++; } }
@@ -200,7 +200,7 @@ fn ws(i: u32) -> f32 { return fld[i * 2u + 1u]; }
   for (var q = 0u; q < 4u; q++) { inp[5u + q] = clamp(nb4[q], -1.0, 1.0); inp[19u + q] = min(1.0, oth4[q]); }
   inp[9] = a.energy / 60.0; inp[10] = rnd(i, 1u) * 2.0 - 1.0; inp[11] = 1.0;
   if (on(2u)) { inp[12] = min(1.0, sg(c) * 2.0); }
-  if (on(16u)) { inp[2] = min(1.0, ws(c) / p.wasteCap); inp[3] = min(1.0, ws(cellOf(x + ch * 1.6, y + sh * 1.6)) / p.wasteCap); }
+  if (on(16u)) { inp[2] = min(1.0, ws(c) / p.wasteCap); inp[3] = min(1.0, ws(cellOf(x + ch * 1.6 * p.csz, y + sh * 1.6 * p.csz)) / p.wasteCap); }
   if (on(8u)) { inp[4] = a.mem; }
   inp[17] = min(1.0, f32(nHeld) / 6.0); if (on(128u) && nHeld > 0u) { inp[18] = msgSum / f32(nHeld); }
   // think
@@ -310,7 +310,7 @@ fn ws(i: u32) -> f32 { return fld[i * 2u + 1u]; }
   if (stay && on(1024u) && a.nb < ${SL}u) { a.bp[a.nb] = ch; a.nb++; c.nb = 1u; c.bp[0] = i; }
   ag[i] = a;
   let ba = a.th + 3.14159 + (rnd(i, 21u) - 0.5) * 1.6;
-  let gap = select(0.55, 0.9, stay); let kick = select(0.15, 0.0, stay);
+  let gap = select(0.55, 0.9, stay) * p.csz; let kick = select(0.15, 0.0, stay);
   c.pos = a.pos + vec2<f32>(cos(ba), sin(ba)) * gap; c.vel = vec2<f32>(cos(ba), sin(ba)) * kick;
   c.th = a.th + (rnd(i, 22u) - 0.5) * 2.0; c.age = 0u; c.gen = a.gen + 1u; c.energy = half; c.speak = 0.0; c.mem = 0.0; c.msg = 0.0; c.held = 0u; c.lastCell = -1.0;
   if (rnd(i, 23u) < p.brainMut * p.mutP) { c.nh = u32(clamp(i32(a.nh) + select(-1, 1, rnd(i, 24u) < 0.5), 1, i32(NH))); }
@@ -393,6 +393,8 @@ fn ws(i: u32) -> f32 { return fld[i * 2u + 1u]; }
   function rand() { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }
   // sound mode: food grows only along the still lines of a vibrating plate (a Chladni pattern), one pattern per note
   let pattern = null;
+  // cell size: every contact distance (push, sense, hold, bite, bonds, birth gap) scales with it; speeds do not
+  let cs = 1;
   function buildCap() {
     if (pattern) {
       const n = pattern.n, m = pattern.m, w = 0.5;
@@ -430,7 +432,7 @@ fn ws(i: u32) -> f32 { return fld[i * 2u + 1u]; }
     setF('mutP', params.mut); setF('mutSd', C.MUT_SD); setF('wasteMake', C.WASTE_MAKE); setF('wasteEat', C.WASTE_EAT); setF('wasteDecay', C.WASTE_DECAY); setF('wasteHarm', C.WASTE_HARM); setF('wasteCap', C.WASTE_CAP); setF('room', C.ROOM);
     setF('neuronCost', C.NEURON_COST); setF('brainMut', C.BRAIN_MUT); setF('seasonLen', C.SEASON); setF('seasonAmp', C.SEASON_AMP); setF('armour', C.ARMOUR); setF('hGain', C.H_GAIN); setF('hMeat', C.H_MEAT); setF('hTry', C.H_TRY);
     setF('shield', C.SHIELD); setF('sting', C.STING); setF('stingCost', C.STING_COST); setF('regen', 0.012 * params.food); setF('startNh', C.START_NH); setF('cells', CELLS);
-    setF('bondK', C.BOND_K); setF('bondRest', C.BOND_REST); setF('bondBreak', C.BOND_BREAK); setF('gap', C.GAP); setF('letGo', C.LETGO); setF('glueRate', C.GLUE_RATE); setF('sizeShield', C.SIZE_SHIELD); setF('shN', pattern ? pattern.n : 0); setF('shM', pattern ? pattern.m : 0); setF('shK', pattern ? 0.12 : 0); setF('kinCap', C.KIN_CAP);
+    setF('bondK', C.BOND_K); setF('bondRest', C.BOND_REST * cs); setF('bondBreak', C.BOND_BREAK * cs); setF('gap', C.GAP); setF('letGo', C.LETGO); setF('glueRate', C.GLUE_RATE); setF('sizeShield', C.SIZE_SHIELD); setF('csz', cs); setU('reach', Math.ceil(cs)); setF('shN', pattern ? pattern.n : 0); setF('shM', pattern ? pattern.m : 0); setF('shK', pattern ? 0.12 : 0); setF('kinCap', C.KIN_CAP);
     Q.writeBuffer(B.P, 0, PU);
   }
   let spawnCount = 0;
@@ -525,7 +527,7 @@ fn ws(i: u32) -> f32 { return fld[i * 2u + 1u]; }
       for (let y = Math.max(0, hy - 1); y <= Math.min(HG2 - 1, hy + 1); y++) for (let x = Math.max(0, hx - 1); x <= Math.min(HG2 - 1, hx + 1); x++)
         for (let j = head[y * HG2 + x]; j >= 0; j = nxt[j]) {
           if (j <= i || glue[j] <= 0 || kind[j] !== kind[i] || hd(hue[i], hue[j]) >= 25) continue;
-          const dx = px[j] - px[i], dy = py[j] - py[i]; if (dx * dx + dy * dy < 2.25 && nBonds < BMAX) { bondA[nBonds] = i; bondB[nBonds] = j; nBonds++; }
+          const dx = px[j] - px[i], dy = py[j] - py[i]; if (dx * dx + dy * dy < 2.25 * cs * cs && nBonds < BMAX) { bondA[nBonds] = i; bondB[nBonds] = j; nBonds++; }
         }
     }
   }
@@ -580,8 +582,9 @@ fn ws(i: u32) -> f32 { return fld[i * 2u + 1u]; }
     pattern = p && p.n > 0 && p.m > 0 && p.n !== p.m ? { n: p.n | 0, m: p.m | 0 } : null; buildCap();
     if (pattern) { const f = new Int32Array(CELLS); for (let i = 0; i < CELLS; i++) { const v = Math.min(food[i], cap[i]); food[i] = v; f[i] = Math.round(v * 1000); } Q.writeBuffer(B.fd, 0, f); }
   }
+  function setCellSize(v) { cs = Math.max(0.5, Math.min(2.5, +v || 1)); }
   return {
-    setPattern, get pattern() { return pattern; },
+    setPattern, get pattern() { return pattern; }, setCellSize, get cellSize() { return cs; },
     gpu: true, adapterName: (adapter.info && (adapter.info.description || adapter.info.vendor)) || '',
     G, MAX, NI, NH, NO, NW, C, CX, CY, DR, params, exp,
     alive, px, py, hue, glue, energy, speak, kind, gen, age, nh, held, msg, mem, food, waste, cap, wall, lin, linPar, linHue, linBorn, linKind, bsize,

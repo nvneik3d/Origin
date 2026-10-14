@@ -63,6 +63,8 @@ function createWorld(opt = {}) {
 
   // sound mode: food grows only along the still lines of a vibrating plate (a Chladni pattern), one pattern per note
   let pattern = null; const SHAKE = 0.12;
+  // cell size: every contact distance (push, sense, hold, bite, bonds, birth gap) scales with it; speeds do not
+  let cs = 1;
   function buildCap() {
     if (pattern) {
       const n = pattern.n, m = pattern.m, w = 0.5;
@@ -173,28 +175,28 @@ function createWorld(opt = {}) {
       inp[1] = exp.memory && lastFood[i] >= 0 ? Math.max(-1, Math.min(1, (food[c] - food[lastFood[i] | 0]) / C.FOOD_CAP * 6)) : 0;
       if (tick % 4 === 0) lastFood[i] = c;
       for (let d = 0; d < 4; d++) {
-        const a = h + d * 1.5708, sc = gi(x + Math.cos(a) * 1.6, y + Math.sin(a) * 1.6);
+        const a = h + d * 1.5708, sc = gi(x + Math.cos(a) * 1.6 * cs, y + Math.sin(a) * 1.6 * cs);
         inp[13 + d] = exp.hearing ? Math.min(1, signal[sc] * 2) : 0;
       }
       nb4[0] = nb4[1] = nb4[2] = nb4[3] = 0;
       let fx = 0, fy = 0, kinN = 0, nKin = 0, prey = -1, preyD = 9, nHeld = 0, msgSum = 0, foe = -1, foeD = 9;
       const kd = kind[i]; oth4[0] = oth4[1] = oth4[2] = oth4[3] = 0;
-      const hx0 = Math.max(0, ((x / S) | 0) - 1), hx1 = Math.min(HG - 1, ((x / S) | 0) + 1), hy0 = Math.max(0, ((y / S) | 0) - 1), hy1 = Math.min(HG - 1, ((y / S) | 0) + 1);
+      const RN = Math.ceil(cs), hx0 = Math.max(0, ((x / S) | 0) - RN), hx1 = Math.min(HG - 1, ((x / S) | 0) + RN), hy0 = Math.max(0, ((y / S) | 0) - RN), hy1 = Math.min(HG - 1, ((y / S) | 0) + RN);
       const ch = Math.cos(h), sh = Math.sin(h), gi_ = glue[i];
       for (let hy = hy0; hy <= hy1; hy++) for (let hx = hx0; hx <= hx1; hx++) {
         for (let j = head[hy * HG + hx]; j >= 0; j = next[j]) {
           if (j === i) continue;
-          const dx = px[j] - x, dy = py[j] - y, d2 = dx * dx + dy * dy; if (d2 >= 4) continue;
-          const d = Math.sqrt(d2) + 1e-6, same = kind[j] === kd, kin = same && hueDist(hue[j], hu) < 25;
+          const dx = px[j] - x, dy = py[j] - y, d2 = dx * dx + dy * dy; if (d2 >= 4 * cs * cs) continue;
+          const dr = Math.sqrt(d2) + 1e-6, d = dr / cs, same = kind[j] === kd, kin = same && hueDist(hue[j], hu) < 25;
           // which side is it on, relative to where I'm facing?
           const fwd = dx * ch + dy * sh, side = -dx * sh + dy * ch;
           const q = Math.abs(fwd) >= Math.abs(side) ? (fwd >= 0 ? 0 : 2) : (side >= 0 ? 1 : 3);
           const w = 1 - d / 2; if (same) nb4[q] += kin ? w : -w; else oth4[q] += w;
-          if (d < 1) { const p = (1 - d) * C.PUSH; fx -= dx / d * p; fy -= dy / d * p; }  // bodies can't overlap
+          if (d < 1) { const p = (1 - d) * C.PUSH; fx -= dx / dr * p; fy -= dy / dr * p; }  // bodies can't overlap
           if (kin && d < 1.45) { kinN++; if (nKin < 8) kinList[nKin++] = j; }
           // holding on: two family members who both choose to be sticky pull together
           if (kin && exp.glue && d < 1.95 && gi_ > 0 && glue[j] > 0) {
-            const g = Math.min(gi_, glue[j]) * C.GLUE * (d - 1); fx += dx / d * g; fy += dy / d * g;
+            const g = Math.min(gi_, glue[j]) * C.GLUE * (d - 1); fx += dx / dr * g; fy += dy / dr * g;
             if (exp.adhesion) { if (exp.contactBond && d < 1.1 && link(i, j)) bondLog.contact++; }
             else if (d < 1.5) { nHeld++; msgSum += msg[j]; if (j > i && nBonds < BMAX) { bondA[nBonds] = i; bondB[nBonds] = j; nBonds++; } }
           }
@@ -209,8 +211,8 @@ function createWorld(opt = {}) {
         for (let s = nbp[i] - 1; s >= 0; s--) {
           const j = bp[o + s], dx = px[j] - x, dy = py[j] - y, d = Math.sqrt(dx * dx + dy * dy) + 1e-6;
           if (gi_ < C.LETGO || glue[j] < C.LETGO || !exp.glue) { unlink(i, s); bondLog.letGo++; continue; }
-          if (d > C.BOND_BREAK) { unlink(i, s); bondLog.snapped++; continue; }
-          const g = C.BOND_K * (d - C.BOND_REST); fx += dx / d * g; fy += dy / d * g;
+          if (d > C.BOND_BREAK * cs) { unlink(i, s); bondLog.snapped++; continue; }
+          const g = C.BOND_K * (d - C.BOND_REST * cs); fx += dx / d * g; fy += dy / d * g;
           nHeld++; msgSum += msg[j]; ax += Math.cos(th[j]); ay += Math.sin(th[j]);
           if (exp.gap) { const t = (energy[i] - energy[j]) * C.GAP; energy[i] -= t; energy[j] += t; }
         }
@@ -220,7 +222,7 @@ function createWorld(opt = {}) {
       for (let q = 0; q < 4; q++) { inp[5 + q] = Math.max(-1, Math.min(1, nb4[q])); inp[19 + q] = Math.min(1, oth4[q]); } // 19-22: the other kind, front/right/behind/left
       inp[9] = energy[i] / 60; inp[10] = rand() * 2 - 1; inp[11] = 1; inp[12] = exp.hearing ? Math.min(1, signal[c] * 2) : 0;
       inp[2] = exp.waste ? Math.min(1, waste[c] / C.WASTE_CAP) : 0;
-      inp[3] = exp.waste ? Math.min(1, waste[gi(x + ch * 1.6, y + sh * 1.6)] / C.WASTE_CAP) : 0;
+      inp[3] = exp.waste ? Math.min(1, waste[gi(x + ch * 1.6 * cs, y + sh * 1.6 * cs)] / C.WASTE_CAP) : 0;
       inp[4] = exp.memory ? mem[i] : 0;
       // inside a body: how many cells it is holding, and what they are signalling to it
       inp[17] = Math.min(1, nHeld / 6); inp[18] = exp.talkInside && nHeld ? msgSum / nHeld : 0; held[i] = nHeld;
@@ -301,7 +303,7 @@ function createWorld(opt = {}) {
           const half = energy[i] * 0.45; energy[i] = half; energy[ch2] = half;
           const ba = th[i] + Math.PI + (rand() - 0.5) * 1.6;
           // a sticky parent's daughter doesn't separate: it stays attached and the body grows
-          const stay = exp.clonal && exp.glue && glue[i] > 0, kick = stay ? 0 : 0.15, gap = stay ? 0.9 : 0.55;
+          const stay = exp.clonal && exp.glue && glue[i] > 0, kick = stay ? 0 : 0.15, gap = (stay ? 0.9 : 0.55) * cs;
           kind[ch2] = kd; nKind[kd]++;
           alive[ch2] = 1; px[ch2] = nx + Math.cos(ba) * gap; py[ch2] = ny + Math.sin(ba) * gap; vx[ch2] = Math.cos(ba) * kick; vy[ch2] = Math.sin(ba) * kick;
           th[ch2] = stay && exp.align ? th[i] : th[i] + (rand() - 0.5) * 2; age[ch2] = 0; gen[ch2] = gen[i] + 1; glue[ch2] = glue[i]; speak[ch2] = 0; mem[ch2] = 0; lastFood[ch2] = -1; msg[ch2] = 0; held[ch2] = 0;
@@ -384,8 +386,9 @@ function createWorld(opt = {}) {
 
   // a new note clears food that is no longer on the pattern, so the cells have to move to the new lines
   function setPattern(p) { pattern = p && p.n > 0 && p.m > 0 && p.n !== p.m ? { n: p.n | 0, m: p.m | 0 } : null; buildCap(); if (pattern) for (let i = 0; i < CELLS; i++) if (food[i] > cap[i]) food[i] = cap[i]; }
+  function setCellSize(v) { cs = Math.max(0.5, Math.min(2.5, +v || 1)); }
   return {
-    setPattern, get pattern() { return pattern; },
+    setPattern, get pattern() { return pattern; }, setCellSize, get cellSize() { return cs; },
     snapshot, restore,
     G, MAX, NI, NH, NO, NW, C, CX, CY, DR, params, exp,
     alive, px, py, vx, vy, th, energy, hue, age, gen, glue, speak, bonds, W, lastOut, food, cap, wall,

@@ -114,6 +114,7 @@ onmessage = async e => {
   }
   else if (!w) return;
   else if (m.type === 'pattern') { if (w.setPattern) w.setPattern(m.pattern); }
+  else if (m.type === 'set' && 'cellSize' in m) { if (w.setCellSize) w.setCellSize(m.cellSize); }
   else if (m.type === 'set') { if ('paused' in m) paused = m.paused; if ('sps' in m) sps = m.sps; for (const k of ['glue', 'memory', 'waste', 'seasons', 'hunters', 'fightBack']) if (k in m) w.exp[k] = m[k]; }
   else if (m.type === 'new') { skipLeft = 0; w.reset(m.seed); ch.reset(); sel = -1; lastStats = 0; lastFood = 0; lastHist = 0; }
   else if (m.type === 'feed') w.feed(m.x, m.y, m.r);

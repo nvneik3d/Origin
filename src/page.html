@@ -153,6 +153,9 @@ a.round { text-decoration: none; }
 .sndinfo b { font: 500 15px var(--mono); color: var(--ink); white-space: nowrap; }
 .sndinfo #sndNote { font-size: 12.5px; line-height: 1.3; }
 .sndinfo .grow { flex: 1; }
+.szwrap { display: flex; align-items: center; gap: 10px; flex: 1; justify-content: flex-end; }
+.szwrap input { width: 130px; accent-color: var(--ink); }
+.szwrap b { font: 500 13px var(--mono); min-width: 40px; text-align: right; }
 .sndinfo button { height: 34px; padding: 0 14px; white-space: nowrap; flex: none; }
 .sw { width: 54px; height: 30px; flex: 0 0 54px; border-radius: 999px; border: 0; box-shadow: var(--press); background: var(--bg); position: relative; cursor: pointer; }
 .sw::after { content: ""; position: absolute; top: 5px; left: 5px; width: 20px; height: 20px; border-radius: 50%; background: var(--knob-off); transition: transform .18s ease, background .18s ease; }
@@ -329,6 +332,7 @@ dialog.sheet h2 { margin: 0 0 14px; font: 900 24px var(--display); text-transfor
           <button type="button" class="round" id="bPause" aria-label="Pause"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M4.2 2 V12 M9.8 2 V12" stroke-width="2.4"></path></svg></button>
         </div>
         <div class="sw-row"><span class="label" style="margin:0">Speed</span><div class="speed" role="group" aria-label="Speed"><button type="button" data-sps="15" aria-pressed="false">½×</button><button type="button" data-sps="30" aria-pressed="true">1×</button><button type="button" data-sps="80" aria-pressed="false">Fast</button></div></div>
+        <div class="sw-row"><span class="label" style="margin:0">Cell size</span><span class="szwrap"><input type="range" id="szR" min="0.75" max="2" step="0.25" value="1" aria-label="Cell size"><b id="szV">1×</b></span></div>
         <div class="sw-row"><span class="label" style="margin:0">Sound</span><div class="speed" role="group" aria-label="Sound shapes where food grows"><button type="button" data-snd="off" aria-pressed="true">Off</button><button type="button" data-snd="tone" aria-pressed="false">Tone</button><button type="button" data-snd="mic" aria-pressed="false">Mic</button></div></div>
         <div class="sndbox" id="sndBox" hidden>
           <input type="range" id="sndPitch" min="0" max="10" step="1" value="0" aria-label="Pitch of the tone">
@@ -680,6 +684,7 @@ dialog.sheet h2 { margin: 0 0 14px; font: 900 24px var(--display); text-transfor
     wk = new Worker(srcURL); wk.onmessage = onWorker;
     wk.postMessage({ type: 'init', G, MAX: cfg.MAX, gpu: cfg.gpu, seed: seed != null ? seed >>> 0 : (Math.random() * 1e9) >>> 0 });
     if (typeof sndPattern !== 'undefined' && sndPattern) wk.postMessage({ type: 'pattern', pattern: sndPattern });
+    if (cellSize !== 1) wk.postMessage({ type: 'set', cellSize });
   }
 
   // ---------- canvas + camera ----------
@@ -731,6 +736,7 @@ dialog.sheet h2 { margin: 0 0 14px; font: 900 24px var(--display); text-transfor
   // ---------- controls ----------
   let look = 'ink', paused = false, selSlot = -1;
   try { const l = localStorage.getItem('fd-look'); if (l === 'ink' || l === 'phase') look = l; } catch (e) {}
+  let cellSize = 1;
   const segSync = (attr, val) => document.querySelectorAll(`[data-${attr}]`).forEach(b => b.setAttribute('aria-pressed', b.dataset[attr] === String(val)));
   const LOOKS = ['ink', 'phase'], LOOKNAME = { ink: 'Ink', phase: 'Phase' };
   function setLook(l) { look = l; el('lookName').textContent = LOOKNAME[l]; el('hudLook').textContent = l; el('hudLook2').textContent = l; el('lookPrev').classList.toggle('dimmed', l === LOOKS[0]); el('lookNext').classList.toggle('dimmed', l === LOOKS[LOOKS.length - 1]); try { localStorage.setItem('fd-look', l); } catch (e) {} }
@@ -1006,7 +1012,8 @@ dialog.sheet h2 { margin: 0 0 14px; font: 900 24px var(--display); text-transfor
     drawArt(); drawAids(); drawHistory(now);
     requestAnimationFrame(frame);
   }
-  function drawCreatures(dark, k, dt) {
+  function drawCreatures(dark, k0, dt) {
+    const k = k0 * cellSize;   // how big cells are drawn follows the cell size setting
     const n = F.n, D = F.data, B = F.bonds;
     // drawn positions glide to the simulated ones, so motion looks continuous between frames
     const a = 1 - Math.exp(-dt / 45);
@@ -1422,6 +1429,8 @@ dialog.sheet h2 { margin: 0 0 14px; font: 900 24px var(--display); text-transfor
     else if (b.closest('.speed, .duo') || b.hasAttribute('aria-pressed') || id === 'themeBtn') sfx('tick');
     else sfx('tap');
   }, true);
+  // ---------- cell size: bigger cells crowd the dish, smaller ones give everyone more room ----------
+  el('szR').oninput = () => { cellSize = +el('szR').value; el('szV').textContent = (cellSize % 1 ? cellSize.toFixed(2).replace(/0$/, '') : cellSize) + '×'; if (wk) wk.postMessage({ type: 'set', cellSize }); };
   // ---------- sound mode: a note sets which Chladni pattern the food grows in ----------
   // every pattern is a pair (n, m); its pitch rises with sqrt(n^2 + m^2), like the modes of a real vibrating plate
   const SND_MODES = []; for (let n = 2; n <= 12; n++) for (let m = 1; m < n; m++) SND_MODES.push({ n, m, hz: Math.round(55 * Math.sqrt(n * n + m * m)) });
