@@ -62,6 +62,19 @@ function createWorld(opt = {}) {
   const gi = (x, y) => { let ix = x | 0, iy = y | 0; if (ix < 0) ix = 0; else if (ix >= G) ix = G - 1; if (iy < 0) iy = 0; else if (iy >= G) iy = G - 1; return iy * G + ix; };
 
   // sound mode: food grows only along the still lines of a vibrating plate (a Chladni pattern), one pattern per note
+  // pigment: three numbers read off the brain's weights, so colour follows the genome and drifts as brains mutate
+  const pig = new Uint32Array(MAX);
+  function pigOf(b) {
+    let p0 = 0, p1 = 0, p2 = 0;
+    for (let k = 0; k < NW; k++) {
+      const v = W[b + k];
+      p0 += (Math.imul(k, -1640531535) >>> 28) & 1 ? v : -v;
+      p1 += (Math.imul(k * 5 + 1, -1640531535) >>> 28) & 1 ? v : -v;
+      p2 += (Math.imul(k * 7 + 2, -1640531535) >>> 28) & 1 ? v : -v;
+    }
+    const q = p => Math.round((Math.tanh(p / 24) * 0.5 + 0.5) * 255);
+    return (q(p0) << 16) | (q(p1) << 8) | q(p2);
+  }
   let pattern = null; const SHAKE = 0.12;
   // cell size: every contact distance (push, sense, hold, bite, bonds, birth gap) scales with it; speeds do not
   let cs = 1;
@@ -98,6 +111,7 @@ function createWorld(opt = {}) {
     alive[i] = 1; px[i] = CX + Math.cos(a) * r; py[i] = CY + Math.sin(a) * r; vx[i] = vy[i] = 0; th[i] = rand() * 6.2832;
     energy[i] = 30; hue[i] = rand() * 360; age[i] = 0; gen[i] = 0; glue[i] = 0; speak[i] = 0; mem[i] = 0; lastFood[i] = -1; nh[i] = C.START_NH; msg[i] = 0; held[i] = 0;
     const b = i * NW; for (let k = 0; k < NW; k++) W[b + k] = gauss() * 0.8;
+    pig[i] = pigOf(b);
     lin[i] = nLin < LMAX ? newLin(-1, hue[i], kind[i]) : 0;
     pop++; return i;
   }
@@ -310,6 +324,7 @@ function createWorld(opt = {}) {
           nh[ch2] = nh[i]; if (rand() < C.BRAIN_MUT * params.mut) nh[ch2] = Math.max(1, Math.min(NH, nh[i] + (rand() < 0.5 ? -1 : 1)));
           const m = params.mut, pb = i * NW, cb = ch2 * NW;
           for (let w = 0; w < NW; w++) W[cb + w] = rand() < C.MUT * m ? W[pb + w] + gauss() * C.MUT_SD : W[pb + w];
+          pig[ch2] = pigOf(cb);
           let hh = hue[i] + gauss() * 2.5 * m; if (rand() < 0.003 * m) hh = rand() * 360;
           hue[ch2] = (hh % 360 + 360) % 360;
           lin[ch2] = lin[i]; if (hueDist(hue[ch2], linHue[lin[i]]) >= 30) lin[ch2] = newLin(lin[i], hue[ch2], kd);
@@ -375,7 +390,7 @@ function createWorld(opt = {}) {
       px[i] = A.px[j]; py[i] = A.py[j]; vx[i] = A.vx[j]; vy[i] = A.vy[j]; th[i] = A.th[j]; energy[i] = A.energy[j]; hue[i] = A.hue[j]; age[i] = A.age[j]; gen[i] = A.gen[j];
       glue[i] = A.glue[j]; mem[i] = A.mem[j]; lastFood[i] = A.lastFood[j]; nh[i] = A.nh[j]; msg[i] = A.msg[j]; held[i] = A.held[j]; bsize[i] = A.bsize[j]; kind[i] = A.kind[j]; nKind[kind[i]]++; lin[i] = A.lin[j];
       nbp[i] = A.nbp[j]; for (let q = 0; q < SL; q++) bp[i * SL + q] = A.bp[j * SL + q];
-      W.set(A.W.subarray(j * NW, (j + 1) * NW), i * NW);
+      W.set(A.W.subarray(j * NW, (j + 1) * NW), i * NW); pig[i] = pigOf(i * NW);
     }
     if (A.free) { freeTop = A.free.length; freeList.set(A.free); } else { freeTop = 0; for (let i = MAX - 1; i >= 0; i--) if (!alive[i]) freeList[freeTop++] = i; }
     if (A.speak) for (let j = 0; j < n; j++) speak[I[j]] = A.speak[j];
@@ -392,7 +407,7 @@ function createWorld(opt = {}) {
     snapshot, restore,
     G, MAX, NI, NH, NO, NW, C, CX, CY, DR, params, exp,
     alive, px, py, vx, vy, th, energy, hue, age, gen, glue, speak, bonds, W, lastOut, food, cap, wall,
-    get signal() { return signal; }, get waste() { return waste; }, mem, nh, msg, held, bsize, kind, get pop() { return pop; }, get tick() { return tick; }, get seed() { return worldSeed; },
+    pig, get signal() { return signal; }, get waste() { return waste; }, mem, nh, msg, held, bsize, kind, get pop() { return pop; }, get tick() { return tick; }, get seed() { return worldSeed; },
     get nBonds() { return nBonds; }, get nLin() { return nLin; }, lin, linPar, linHue, linBorn, linKind, bondA, bondB, bp, nbp, SL, bondLog,
     reset, step, stats, spawnRandom, organisms, orgOf, orgSize, find,
     feed(x, y, r) { for (let yy = Math.max(0, (y - r) | 0); yy <= Math.min(G - 1, (y + r) | 0); yy++) for (let xx = Math.max(0, (x - r) | 0); xx <= Math.min(G - 1, (x + r) | 0); xx++) { const d = Math.hypot(xx + 0.5 - x, yy + 0.5 - y); if (d < r && !wall[yy * G + xx]) food[yy * G + xx] = Math.min(C.FOOD_CAP * 1.5, food[yy * G + xx] + C.FOOD_CAP * (1 - d / r) * 1.2); } },

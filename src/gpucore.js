@@ -20,7 +20,7 @@ async function createGpuWorld(opt = {}) {
   const CX = G / 2, CY = G / 2, DR = G / 2 * 0.955, CELLS = G * G;
   const AREA = CELLS / 36864;
   const BS = 2, HB = Math.ceil(G / BS), BK = 28;  // spatial buckets: 2x2 units, up to 28 creatures each (bodies pack tightly)
-  const ST = 28;                                   // agent record: 28 words (20 + family id, attachment count, 6 partner slots)
+  const ST = 30;                                   // agent record: 30 words (20 + family id, attachment count, 6 partner slots, pigment, padding to a multiple of 8 bytes)
   const SL = 6, LMAX = 40000;
 
   // ---------- parameters (one uniform block, generated from this list so JS and WGSL agree) ----------
@@ -64,7 +64,7 @@ struct Agent {
   mem: f32, msg: f32, speak: f32, lastCell: f32,
   age: u32, gen: u32, kind: u32, nh: u32,
   held: u32, alive: u32, kin: u32, lin: i32,
-  nb: u32, bsize: u32, bp: array<u32, ${SL}>,
+  nb: u32, bsize: u32, bp: array<u32, ${SL}>, pig: u32, pad1: u32,
 };
 const NI = ${NI}u; const NH = ${NH}u; const NO = ${NO}u; const NW = ${NW}u;
 @group(0) @binding(0) var<uniform> p: P;
@@ -72,6 +72,8 @@ fn hsh(x: u32) -> u32 { var v = x * 747796405u + 2891336453u; v = ((v >> ((v >> 
 fn rnd(a: u32, k: u32) -> f32 { return f32(hsh((a * 9781u) ^ hsh(p.tick * 6271u + k * 31337u + p.seed))) / 4294967296.0; }
 fn gauss(a: u32, k: u32) -> f32 { let u = max(rnd(a, k), 1e-7); let v = rnd(a, k + 977u); return sqrt(-2.0 * log(u)) * cos(6.2831853 * v); }
 fn on(f: u32) -> bool { return (p.flags & f) != 0u; }
+fn psign(k: u32, c: u32) -> f32 { return select(-1.0, 1.0, ((((k * (c * 2u + 3u)) * 2654435761u) >> 28u) & 1u) == 1u); }
+fn pq(p: f32) -> u32 { return u32(round((tanh(clamp(p / 24.0, -9.0, 9.0)) * 0.5 + 0.5) * 255.0)); }
 fn sth(x: f32) -> f32 { return tanh(clamp(x, -12.0, 12.0)); }   // some drivers return NaN from tanh of large inputs
 fn bad(x: f32) -> bool { return (bitcast<u32>(x) & 0x7f800000u) == 0x7f800000u; }
 fn cellOf(x: f32, y: f32) -> u32 { let ix = clamp(i32(floor(x)), 0, i32(p.G) - 1); let iy = clamp(i32(floor(y)), 0, i32(p.G) - 1); return u32(iy) * p.G + u32(ix); }
@@ -322,7 +324,9 @@ fn ws(i: u32) -> f32 { return fld[i * 2u + 1u]; }
   }
   ag[ch] = c;
   let pb = i * NW; let cb = ch * NW;
-  for (var w = 0u; w < NW; w++) { var v = W[pb + w]; if (rnd(i, 100u + w) < p.mutP * ${C.MUT}) { v += gauss(i, 2000u + w) * ${C.MUT_SD}; } W[cb + w] = v; }
+  var q0 = 0.0; var q1 = 0.0; var q2 = 0.0;
+  for (var w = 0u; w < NW; w++) { var v = W[pb + w]; if (rnd(i, 100u + w) < p.mutP * ${C.MUT}) { v += gauss(i, 2000u + w) * ${C.MUT_SD}; } W[cb + w] = v; q0 += v * psign(w, 0u); q1 += v * psign(w, 1u); q2 += v * psign(w, 2u); }
+  ag[ch].pig = (pq(q0) << 16u) | (pq(q1) << 8u) | pq(q2);
   atomicAdd(&ctr[1], 1); atomicAdd(&ctr[6], 1);
   if (a.kind == 1u) { atomicAdd(&ctr[8], 1); }
 }`;
@@ -346,7 +350,9 @@ fn ws(i: u32) -> f32 { return fld[i * 2u + 1u]; }
   a.lin = -1; let id = atomicAdd(&ctr[10], 1);
   if (id < ${LMAX}) { let o = u32(id) * 4u; lt[o] = -1.0; lt[o + 1u] = a.hue; lt[o + 2u] = f32(p.tick); lt[o + 3u] = f32(p.spawnKind); a.lin = id; } else { atomicSub(&ctr[10], 1); }
   ag[i] = a;
-  let b = i * NW; for (var w = 0u; w < NW; w++) { W[b + w] = gauss(key, 10u + w) * 0.8; }
+  var q0 = 0.0; var q1 = 0.0; var q2 = 0.0;
+  let b = i * NW; for (var w = 0u; w < NW; w++) { let v = gauss(key, 10u + w) * 0.8; W[b + w] = v; q0 += v * psign(w, 0u); q1 += v * psign(w, 1u); q2 += v * psign(w, 2u); }
+  ag[i].pig = (pq(q0) << 16u) | (pq(q1) << 8u) | pq(q2);
 }`;
   // end of step: remember the population for crowding, reset per-step counters
   const finish = common + /* wgsl */`
@@ -380,11 +386,12 @@ fn ws(i: u32) -> f32 { return fld[i * 2u + 1u]; }
   const run = (e, name, n) => { const ps = e.beginComputePass(); ps.setPipeline(PP[name]); BG[name].forEach((g, k) => ps.setBindGroup(k, g)); ps.dispatchWorkgroups(Math.ceil(n / 64)); ps.end(); };
 
   // ---------- CPU mirrors (same names as core.js) ----------
+  const pig = new Uint32Array(MAX);
   const alive = new Uint8Array(MAX), px = new Float32Array(MAX), py = new Float32Array(MAX), hue = new Float32Array(MAX), glue = new Float32Array(MAX), energy = new Float32Array(MAX);
   const speak = new Float32Array(MAX), kind = new Uint8Array(MAX), gen = new Uint32Array(MAX), age = new Uint32Array(MAX), nh = new Uint8Array(MAX), held = new Uint8Array(MAX), msg = new Float32Array(MAX), mem = new Float32Array(MAX), kinN = new Uint8Array(MAX);
   const lin = new Int32Array(MAX), nbp = new Uint8Array(MAX), bp = new Int32Array(MAX * SL).fill(-1), bsize = new Uint16Array(MAX).fill(1);
   const linPar = new Int32Array(LMAX), linHue = new Float32Array(LMAX), linBorn = new Int32Array(LMAX), linKind = new Uint8Array(LMAX); let nLin = 0, nLinRead = 0;
-  const food = new Float32Array(CELLS), waste = new Float32Array(CELLS), cap = new Float32Array(CELLS), wall = new Uint8Array(CELLS);
+  const sig = new Float32Array(CELLS), food = new Float32Array(CELLS), waste = new Float32Array(CELLS), cap = new Float32Array(CELLS), wall = new Uint8Array(CELLS);
   for (let y = 0; y < G; y++) for (let x = 0; x < G; x++) if (Math.hypot(x + 0.5 - CX, y + 0.5 - CY) > DR) wall[y * G + x] = 1;
   const BMAX = 120000, bondA = new Int32Array(BMAX), bondB = new Int32Array(BMAX); let nBonds = 0;
   let overflow = 0, pop = 0, tick = 0, births = 0, kills = 0, stung = 0, reintroduced = 0, worldSeed = 0, blobs = [], popPrev = 0;
@@ -492,7 +499,7 @@ fn ws(i: u32) -> f32 { return fld[i * 2u + 1u]; }
         const o = i * ST, al = u[o + 17];
         alive[i] = al; if (!al) continue;
         px[i] = f[o]; py[i] = f[o + 1]; energy[i] = f[o + 5]; hue[i] = f[o + 6]; glue[i] = f[o + 7]; mem[i] = f[o + 8]; msg[i] = f[o + 9]; speak[i] = f[o + 10];
-        age[i] = u[o + 12]; gen[i] = u[o + 13]; kind[i] = u[o + 14]; nh[i] = u[o + 15]; held[i] = u[o + 16]; kinN[i] = u[o + 18]; lin[i] = si[o + 19];
+        age[i] = u[o + 12]; gen[i] = u[o + 13]; kind[i] = u[o + 14]; nh[i] = u[o + 15]; held[i] = u[o + 16]; pig[i] = u[o + 28]; kinN[i] = u[o + 18]; lin[i] = si[o + 19];
         const nb = Math.min(SL, u[o + 20]); nbp[i] = nb; for (let q = 0; q < SL; q++) bp[i * SL + q] = q < nb ? u[o + 22 + q] : -1;
         n++; nKind[kind[i]]++;
       }
@@ -500,7 +507,7 @@ fn ws(i: u32) -> f32 { return fld[i * 2u + 1u]; }
       const ct = new Int32Array(RB.ctr.getMappedRange()); births = ct[1]; kills = ct[2]; stung = ct[3]; popPrev = Math.max(0, ct[4]); nLin = Math.min(LMAX, ct[10]); overflow = ct[11]; RB.ctr.unmap();
       if (withFields) {
         const fi = new Int32Array(RB.food.getMappedRange()); for (let i = 0; i < CELLS; i++) food[i] = fi[i] / 1000; RB.food.unmap();
-        const wf = new Float32Array(RB.waste.getMappedRange()); for (let i = 0; i < CELLS; i++) waste[i] = wf[i * 2 + 1]; RB.waste.unmap();
+        const wf = new Float32Array(RB.waste.getMappedRange()); for (let i = 0; i < CELLS; i++) { sig[i] = wf[i * 2]; waste[i] = wf[i * 2 + 1]; } RB.waste.unmap();
       }
       pop = n;
       // keep both kinds alive (counted, like the CPU version)
@@ -567,7 +574,8 @@ fn ws(i: u32) -> f32 { return fld[i * 2u + 1u]; }
     tick = m.tick; seed = m.seed; worldSeed = m.worldSeed; births = m.births; kills = m.kills; stung = m.stung; reintroduced = m.reintroduced; popPrev = m.popPrev; spawnCount = m.spawnCount || 0;
     blobs = m.blobs.map(b => Object.assign({}, b)); Object.assign(params, m.params); Object.assign(exp, m.exp); buildCap();
     const agU = new Uint32Array(MAX * ST), Wf = new Float32Array(MAX * NW), I = A.idx;
-    for (let j = 0; j < I.length; j++) { agU.set(A.ag.subarray(j * ST, (j + 1) * ST), I[j] * ST); Wf.set(A.W.subarray(j * NW, (j + 1) * NW), I[j] * NW); }
+    const st0 = I.length ? Math.round(A.ag.length / I.length) : ST;   // older saves have 28-word records (no pigment)
+    for (let j = 0; j < I.length; j++) { agU.set(A.ag.subarray(j * st0, j * st0 + Math.min(st0, ST)), I[j] * ST); Wf.set(A.W.subarray(j * NW, (j + 1) * NW), I[j] * NW); }
     Q.writeBuffer(B.ag, 0, agU); Q.writeBuffer(B.prv, 0, agU); Q.writeBuffer(B.W, 0, Wf); Q.writeBuffer(B.fd, 0, A.fd); Q.writeBuffer(B.fld, 0, A.fld); Q.writeBuffer(B.free, 0, A.free); Q.writeBuffer(B.ctr, 0, A.ctr);
     Q.writeBuffer(B.tmp, 0, new Uint8Array(B.tmp.size)); Q.writeBuffer(B.dek, 0, new Uint8Array(B.dek.size));
     const lt = new Float32Array(LMAX * 4); lt.set(A.lt.subarray(0, Math.min(A.lt.length, LMAX * 4))); Q.writeBuffer(B.lt, 0, lt);
@@ -584,10 +592,10 @@ fn ws(i: u32) -> f32 { return fld[i * 2u + 1u]; }
   }
   function setCellSize(v) { cs = Math.max(0.5, Math.min(2.5, +v || 1)); }
   return {
-    setPattern, get pattern() { return pattern; }, setCellSize, get cellSize() { return cs; },
+    pig, setPattern, get pattern() { return pattern; }, setCellSize, get cellSize() { return cs; },
     gpu: true, adapterName: (adapter.info && (adapter.info.description || adapter.info.vendor)) || '',
     G, MAX, NI, NH, NO, NW, C, CX, CY, DR, params, exp,
-    alive, px, py, hue, glue, energy, speak, kind, gen, age, nh, held, msg, mem, food, waste, cap, wall, lin, linPar, linHue, linBorn, linKind, bsize,
+    alive, px, py, hue, glue, energy, speak, kind, gen, age, nh, held, msg, mem, food, waste, signal: sig, cap, wall, lin, linPar, linHue, linBorn, linKind, bsize,
     get nLin() { return nLinRead; }, snapshot, restore,
     get pop() { return pop; }, get overflow() { return overflow; }, kinN, get tick() { return tick; }, get seed() { return worldSeed; }, get nBonds() { return nBonds; }, get lost() { return lost; },
     bondA, bondB, orgOf, orgSize, find,

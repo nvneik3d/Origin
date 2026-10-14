@@ -625,7 +625,7 @@ dialog.sheet h2 { margin: 0 0 14px; font: 900 24px var(--display); text-transfor
   function readTheme() {
     const s = getComputedStyle(root);
     for (const k of ['plate', 'food', 'ink', 'dim', 'line', 'surface', 'bg']) T[k] = parse(s.getPropertyValue('--' + k));
-    const S = parseFloat(s.getPropertyValue('--hue-s')) || 0.5, L = parseFloat(s.getPropertyValue('--hue-l')) || 0.4;
+    const S = parseFloat(s.getPropertyValue('--hue-s')) || 0.5, L = parseFloat(s.getPropertyValue('--hue-l')) || 0.4; themeS = S; themeL = L; geneCache.clear();
     for (let h = 0; h < 360; h++) {
       const a = S * Math.min(L, 1 - L), f = n => { const k = (n + h / 30) % 12; return L - a * Math.max(-1, Math.min(k - 3, 9 - k, 1)); };
       hueLUT[h * 3] = f(0) * 255; hueLUT[h * 3 + 1] = f(8) * 255; hueLUT[h * 3 + 2] = f(4) * 255;
@@ -637,12 +637,25 @@ dialog.sheet h2 { margin: 0 0 14px; font: 900 24px var(--display); text-transfor
   try { const t = localStorage.getItem('fd-theme'); if (t === 'light' || t === 'dark') root.dataset.theme = t; } catch (e) {}
   mq.addEventListener('change', readTheme);
   const rgb = (c, m = 1) => `rgb(${Math.min(255, c[0] * m) | 0},${Math.min(255, c[1] * m) | 0},${Math.min(255, c[2] * m) | 0})`;
+  // genome colour: the family hue, nudged by three pigment genes read off the cell's brain
+  // (hue shifts up to about 26 degrees, plus richer or paler, lighter or darker); relatives shimmer instead of matching exactly
+  let themeS = 0.5, themeL = 0.4; const geneCache = new Map();
+  function geneParts(h, code) {
+    const t1 = ((code >> 16) & 255) / 127.5 - 1, t2 = ((code >> 8) & 255) / 127.5 - 1, t3 = (code & 255) / 127.5 - 1;
+    return [((h + 26 * t1) % 360 + 360) % 360, Math.min(1, themeS * (0.68 + 0.32 * (t2 * 0.5 + 0.5))), Math.max(0.12, Math.min(0.88, themeL + 0.1 * t3))];
+  }
+  function geneKey(h, code) { const [hh, ss, ll] = geneParts(h, code); return ((hh / 4) | 0) * 100 + Math.round(ss * 9) * 10 + Math.round((ll - 0.12) * 12); }
+  function geneRGB(h, code) {
+    const key = geneKey(h, code); let c = geneCache.get(key); if (c) return c;
+    const [hh, S, L] = geneParts(h, code), a = S * Math.min(L, 1 - L), f = n => { const k = (n + hh / 30) % 12; return L - a * Math.max(-1, Math.min(k - 3, 9 - k, 1)); };
+    c = [f(0) * 255 | 0, f(8) * 255 | 0, f(4) * 255 | 0]; geneCache.set(key, c); return c;
+  }
   const hueRGB = h => { const k = ((h | 0) % 360) * 3; return [hueLUT[k], hueLUT[k + 1], hueLUT[k + 2]]; };
 
   // ---------- worker ----------
   const src = el('coreSrc').textContent;
   const srcURL = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
-  let wk = null, F = null, foodBytes = null, wasteBytes = null, stats = null, selInfo = null, foodDirty = true;
+  let wk = null, F = null, foodBytes = null, wasteBytes = null, sigBytes = null, stats = null, selInfo = null, foodDirty = true;
   let disp = new Float32Array(9000 * 2).fill(NaN);
   let pendingLoad = null, firstFrame = false;
   function onWorker(e) {
@@ -663,7 +676,7 @@ dialog.sheet h2 { margin: 0 0 14px; font: 900 24px var(--display); text-transfor
     if (m.events) addEvents(m.events);
     if (m.hist) { hist = m.hist; histDirty = true; }
     if (m.tree) { tree = m.tree; histDirty = true; }
-    if (m.food) { foodBytes = m.food; wasteBytes = m.waste; foodDirty = true; }
+    if (m.food) { foodBytes = m.food; wasteBytes = m.waste; sigBytes = m.sig || null; foodDirty = true; }
     if (m.stats) { stats = m.stats; showStats(); }
     if (m.sel) { selInfo = m.sel; showSel(); }
   }
@@ -899,7 +912,7 @@ dialog.sheet h2 { margin: 0 0 14px; font: 900 24px var(--display); text-transfor
     x.lineCap = 'round'; x.lineWidth = sc * 0.34;
     for (let b = 0; b < B.length; b += 2) {
       if (!near(B[b])) continue;
-      const sa = D[B[b] * 8], sb = D[B[b + 1] * 8], c = hueRGB(D[B[b] * 8 + 3]);
+      const sa = D[B[b] * 8], sb = D[B[b + 1] * 8], c = geneRGB(D[B[b] * 8 + 3], D[B[b] * 8 + 4]);
       x.strokeStyle = D[B[b] * 8 + 7] === 1 ? rgb(T.ink) : (dark ? rgb(c, 0.75) : rgb(c, 0.8)); x.globalAlpha = 0.8;
       x.beginPath(); x.moveTo(X(disp[sa * 2]), Y(disp[sa * 2 + 1])); x.lineTo(X(disp[sb * 2]), Y(disp[sb * 2 + 1])); x.stroke();
     }
@@ -909,8 +922,8 @@ dialog.sheet h2 { margin: 0 0 14px; font: 900 24px var(--display); text-transfor
       if (!near(j)) continue;
       const o = j * 8, s0 = D[o], cx = X(disp[s0 * 2]), cy = Y(disp[s0 * 2 + 1]);
       if (D[o + 7] === 1) { x.strokeStyle = rgb(T.ink); x.lineWidth = sc * 0.18; x.beginPath(); x.arc(cx, cy, sc * 0.5, 0, 6.2832); x.stroke(); continue; }
-      if (look === 'phase') { const sz = sc * (1.25 + D[o + 5] * 0.3); x.drawImage(phaseSprite(D[o + 3], dark), cx - sz / 2, cy - sz / 2, sz, sz); continue; }
-      const c = hueRGB(D[o + 3]), rr = sc * (0.44 + D[o + 5] * 0.14);
+      if (look === 'phase') { const sz = sc * (1.25 + D[o + 5] * 0.3); x.drawImage(phaseSprite(geneParts(D[o + 3], D[o + 4])[0], dark), cx - sz / 2, cy - sz / 2, sz, sz); continue; }
+      const c = geneRGB(D[o + 3], D[o + 4]), rr = sc * (0.44 + D[o + 5] * 0.14);
       const g = x.createRadialGradient(cx - rr * 0.25, cy - rr * 0.3, rr * 0.1, cx, cy, rr);
       g.addColorStop(0, rgb(c, dark ? 1.35 : 1.25)); g.addColorStop(0.7, rgb(c, dark ? 1 : 0.85)); g.addColorStop(1, rgb(c, dark ? 0.7 : 0.6));
       x.fillStyle = g; x.beginPath(); x.arc(cx, cy, rr, 0, 6.2832); x.fill();
@@ -973,10 +986,13 @@ dialog.sheet h2 { margin: 0 0 14px; font: 900 24px var(--display); text-transfor
     const p = dark && look === 'phase' ? [34, 38, 41] : look === 'phase' ? [146, 152, 155] : T.plate;
     const f = look === 'phase' ? (dark ? [70, 78, 82] : [96, 102, 106]) : T.food, d = foodImg.data;
     const wc = look === 'phase' ? (dark ? [20, 22, 24] : [104, 108, 110]) : (dark ? [58, 44, 26] : [150, 124, 84]);
+    const sc = dark ? [150, 110, 235] : [120, 80, 190];
     for (let i = 0; i < G * G; i++) {
       const v = foodBytes[i] / 255, t = v * v * (dark ? 0.85 : 0.66);
       let r = p[0] + (f[0] - p[0]) * t, g = p[1] + (f[1] - p[1]) * t, b = p[2] + (f[2] - p[2]) * t;
       if (wasteBytes) { const u = Math.min(1, wasteBytes[i] / 255 * 1.6) * 0.7; r += (wc[0] - r) * u; g += (wc[1] - g) * u; b += (wc[2] - b) * u; }
+      // calls: the signal cells send through the jelly, shown as a soft glow
+      if (sigBytes && sigBytes[i]) { const u = Math.min(1, sigBytes[i] / 255) * (dark ? 0.55 : 0.4); r += (sc[0] - r) * u; g += (sc[1] - g) * u; b += (sc[2] - b) * u; }
       d[i * 4] = r; d[i * 4 + 1] = g; d[i * 4 + 2] = b; d[i * 4 + 3] = 255;
     }
     foodX.putImageData(foodImg, 0, 0); foodDirty = false;
@@ -1029,21 +1045,21 @@ dialog.sheet h2 { margin: 0 0 14px; font: 900 24px var(--display); text-transfor
       const P = pig.width / cw, pk = k * P, px = x => toSX(x) * P, py = y => toSY(y) * P;
       pigX.setTransform(1, 0, 0, 1, 0, 0); pigX.clearRect(0, 0, pig.width, pig.height);
       const paths = new Map();
-      const pathFor = h => { const key = (h / 6) | 0; let p = paths.get(key); if (!p) { p = { c: new Path2D(), l: new Path2D(), h: key * 6 + 3 }; paths.set(key, p); } return p; };
+      const pathFor = (h, code) => { const key = geneKey(h, code); let p = paths.get(key); if (!p) { p = { c: new Path2D(), l: new Path2D(), rgb: geneRGB(h, code) }; paths.set(key, p); } return p; };
       for (let j = 0; j < n; j++) {
         if (!vis(j)) continue;
         if (D[j * 8 + 7] === 1) continue;
-        const o = j * 8, s = D[o], x = px(disp[s * 2]), y = py(disp[s * 2 + 1]), r = pk * (0.42 + D[o + 5] * 0.16), p = pathFor(D[o + 3]);
+        const o = j * 8, s = D[o], x = px(disp[s * 2]), y = py(disp[s * 2 + 1]), r = pk * (0.42 + D[o + 5] * 0.16), p = pathFor(D[o + 3], D[o + 4]);
         p.c.moveTo(x + r, y); p.c.arc(x, y, r, 0, 6.2832);
       }
       for (let b = 0; b < B.length; b += 2) {
         if (D[B[b] * 8 + 7] === 1) continue;
-        const sa = D[B[b] * 8], sb = D[B[b + 1] * 8], p = pathFor(D[B[b] * 8 + 3]);
+        const sa = D[B[b] * 8], sb = D[B[b + 1] * 8], p = pathFor(D[B[b] * 8 + 3], D[B[b] * 8 + 4]);
         p.l.moveTo(px(disp[sa * 2]), py(disp[sa * 2 + 1])); p.l.lineTo(px(disp[sb * 2]), py(disp[sb * 2 + 1]));
       }
       pigX.lineCap = 'round'; pigX.lineWidth = Math.max(1, pk * 0.62);
       for (const p of paths.values()) {
-        const c = hueRGB(p.h), col = dark ? rgb(c, 0.62) : rgb(c, 0.82);
+        const c = p.rgb, col = dark ? rgb(c, 0.62) : rgb(c, 0.82);
         pigX.fillStyle = col; pigX.fill(p.c); pigX.strokeStyle = col; pigX.stroke(p.l);
       }
       const mode = dark ? 'lighter' : 'multiply';
@@ -1059,7 +1075,7 @@ dialog.sheet h2 { margin: 0 0 14px; font: 900 24px var(--display); text-transfor
         if (!vis(j)) continue;
         if (D[j * 8 + 7] === 1) continue;
         const o = j * 8, s = D[o], sz = k * (1.25 + D[o + 5] * 0.3);
-        ctx.drawImage(phaseSprite(D[o + 3], dark), toSX(disp[s * 2]) - sz / 2, toSY(disp[s * 2 + 1]) - sz / 2, sz, sz);
+        ctx.drawImage(phaseSprite(geneParts(D[o + 3], D[o + 4])[0], dark), toSX(disp[s * 2]) - sz / 2, toSY(disp[s * 2 + 1]) - sz / 2, sz, sz);
       }
     }
     // hunters: hollow rings, a different kind of life from the colour-filled grazers

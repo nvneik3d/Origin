@@ -7,7 +7,7 @@ function frame(now) {
   for (let i = 0; i < MAX && k < n; i++) {
     if (!w.alive[i]) continue;
     idx[i] = k; const o = k * 8; data[o + 7] = w.kind[i];
-    data[o] = i; data[o + 1] = w.px[i]; data[o + 2] = w.py[i]; data[o + 3] = w.hue[i]; data[o + 4] = w.glue[i]; data[o + 5] = Math.min(1, w.energy[i] / w.C.REPRO); data[o + 6] = w.speak[i];
+    data[o] = i; data[o + 1] = w.px[i]; data[o + 2] = w.py[i]; data[o + 3] = w.hue[i]; data[o + 4] = w.pig ? w.pig[i] : 0; data[o + 5] = Math.min(1, w.energy[i] / w.C.REPRO); data[o + 6] = w.speak[i];
     k++;
   }
   const nb = w.nBonds, bonds = new Int32Array(nb * 2); let m = 0;
@@ -31,11 +31,12 @@ function frame(now) {
     const ev = ch.takeFresh(); if (ev.length) msg.events = ev;
     if (now - lastHist > 1000) { lastHist = now; const h = ch.history(); msg.hist = h; tr.push(h.data.buffer); msg.tree = ch.tree(); }
   }
-  if (now - lastFood > 600) {
+  if (now - lastFood > 350) {
     lastFood = now;
-    const G = w.G, f = new Uint8Array(G * G), wa = new Uint8Array(G * G), cap = w.C.FOOD_CAP, wc = w.C.WASTE_CAP, W_ = w.waste;
+    const G = w.G, f = new Uint8Array(G * G), wa = new Uint8Array(G * G), sg = new Uint8Array(G * G), cap = w.C.FOOD_CAP, wc = w.C.WASTE_CAP, W_ = w.waste, S_ = w.signal;
     for (let i = 0; i < G * G; i++) { f[i] = Math.min(255, w.food[i] / cap * 255); wa[i] = Math.min(255, W_[i] / wc * 255); }
-    msg.food = f; msg.waste = wa; tr.push(f.buffer, wa.buffer);
+    if (S_) for (let i = 0; i < G * G; i++) sg[i] = Math.min(255, S_[i] * 160);
+    msg.food = f; msg.waste = wa; msg.sig = sg; tr.push(f.buffer, wa.buffer, sg.buffer);
   }
   postMessage(msg, tr);
 }

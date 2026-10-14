@@ -671,6 +671,19 @@ function createWorld(opt = {}) {
   const gi = (x, y) => { let ix = x | 0, iy = y | 0; if (ix < 0) ix = 0; else if (ix >= G) ix = G - 1; if (iy < 0) iy = 0; else if (iy >= G) iy = G - 1; return iy * G + ix; };
 
   // sound mode: food grows only along the still lines of a vibrating plate (a Chladni pattern), one pattern per note
+  // pigment: three numbers read off the brain's weights, so colour follows the genome and drifts as brains mutate
+  const pig = new Uint32Array(MAX);
+  function pigOf(b) {
+    let p0 = 0, p1 = 0, p2 = 0;
+    for (let k = 0; k < NW; k++) {
+      const v = W[b + k];
+      p0 += (Math.imul(k, -1640531535) >>> 28) & 1 ? v : -v;
+      p1 += (Math.imul(k * 5 + 1, -1640531535) >>> 28) & 1 ? v : -v;
+      p2 += (Math.imul(k * 7 + 2, -1640531535) >>> 28) & 1 ? v : -v;
+    }
+    const q = p => Math.round((Math.tanh(p / 24) * 0.5 + 0.5) * 255);
+    return (q(p0) << 16) | (q(p1) << 8) | q(p2);
+  }
   let pattern = null; const SHAKE = 0.12;
   // cell size: every contact distance (push, sense, hold, bite, bonds, birth gap) scales with it; speeds do not
   let cs = 1;
@@ -707,6 +720,7 @@ function createWorld(opt = {}) {
     alive[i] = 1; px[i] = CX + Math.cos(a) * r; py[i] = CY + Math.sin(a) * r; vx[i] = vy[i] = 0; th[i] = rand() * 6.2832;
     energy[i] = 30; hue[i] = rand() * 360; age[i] = 0; gen[i] = 0; glue[i] = 0; speak[i] = 0; mem[i] = 0; lastFood[i] = -1; nh[i] = C.START_NH; msg[i] = 0; held[i] = 0;
     const b = i * NW; for (let k = 0; k < NW; k++) W[b + k] = gauss() * 0.8;
+    pig[i] = pigOf(b);
     lin[i] = nLin < LMAX ? newLin(-1, hue[i], kind[i]) : 0;
     pop++; return i;
   }
@@ -919,6 +933,7 @@ function createWorld(opt = {}) {
           nh[ch2] = nh[i]; if (rand() < C.BRAIN_MUT * params.mut) nh[ch2] = Math.max(1, Math.min(NH, nh[i] + (rand() < 0.5 ? -1 : 1)));
           const m = params.mut, pb = i * NW, cb = ch2 * NW;
           for (let w = 0; w < NW; w++) W[cb + w] = rand() < C.MUT * m ? W[pb + w] + gauss() * C.MUT_SD : W[pb + w];
+          pig[ch2] = pigOf(cb);
           let hh = hue[i] + gauss() * 2.5 * m; if (rand() < 0.003 * m) hh = rand() * 360;
           hue[ch2] = (hh % 360 + 360) % 360;
           lin[ch2] = lin[i]; if (hueDist(hue[ch2], linHue[lin[i]]) >= 30) lin[ch2] = newLin(lin[i], hue[ch2], kd);
@@ -984,7 +999,7 @@ function createWorld(opt = {}) {
       px[i] = A.px[j]; py[i] = A.py[j]; vx[i] = A.vx[j]; vy[i] = A.vy[j]; th[i] = A.th[j]; energy[i] = A.energy[j]; hue[i] = A.hue[j]; age[i] = A.age[j]; gen[i] = A.gen[j];
       glue[i] = A.glue[j]; mem[i] = A.mem[j]; lastFood[i] = A.lastFood[j]; nh[i] = A.nh[j]; msg[i] = A.msg[j]; held[i] = A.held[j]; bsize[i] = A.bsize[j]; kind[i] = A.kind[j]; nKind[kind[i]]++; lin[i] = A.lin[j];
       nbp[i] = A.nbp[j]; for (let q = 0; q < SL; q++) bp[i * SL + q] = A.bp[j * SL + q];
-      W.set(A.W.subarray(j * NW, (j + 1) * NW), i * NW);
+      W.set(A.W.subarray(j * NW, (j + 1) * NW), i * NW); pig[i] = pigOf(i * NW);
     }
     if (A.free) { freeTop = A.free.length; freeList.set(A.free); } else { freeTop = 0; for (let i = MAX - 1; i >= 0; i--) if (!alive[i]) freeList[freeTop++] = i; }
     if (A.speak) for (let j = 0; j < n; j++) speak[I[j]] = A.speak[j];
@@ -1001,7 +1016,7 @@ function createWorld(opt = {}) {
     snapshot, restore,
     G, MAX, NI, NH, NO, NW, C, CX, CY, DR, params, exp,
     alive, px, py, vx, vy, th, energy, hue, age, gen, glue, speak, bonds, W, lastOut, food, cap, wall,
-    get signal() { return signal; }, get waste() { return waste; }, mem, nh, msg, held, bsize, kind, get pop() { return pop; }, get tick() { return tick; }, get seed() { return worldSeed; },
+    pig, get signal() { return signal; }, get waste() { return waste; }, mem, nh, msg, held, bsize, kind, get pop() { return pop; }, get tick() { return tick; }, get seed() { return worldSeed; },
     get nBonds() { return nBonds; }, get nLin() { return nLin; }, lin, linPar, linHue, linBorn, linKind, bondA, bondB, bp, nbp, SL, bondLog,
     reset, step, stats, spawnRandom, organisms, orgOf, orgSize, find,
     feed(x, y, r) { for (let yy = Math.max(0, (y - r) | 0); yy <= Math.min(G - 1, (y + r) | 0); yy++) for (let xx = Math.max(0, (x - r) | 0); xx <= Math.min(G - 1, (x + r) | 0); xx++) { const d = Math.hypot(xx + 0.5 - x, yy + 0.5 - y); if (d < r && !wall[yy * G + xx]) food[yy * G + xx] = Math.min(C.FOOD_CAP * 1.5, food[yy * G + xx] + C.FOOD_CAP * (1 - d / r) * 1.2); } },
@@ -1031,7 +1046,7 @@ async function createGpuWorld(opt = {}) {
   const CX = G / 2, CY = G / 2, DR = G / 2 * 0.955, CELLS = G * G;
   const AREA = CELLS / 36864;
   const BS = 2, HB = Math.ceil(G / BS), BK = 28;  // spatial buckets: 2x2 units, up to 28 creatures each (bodies pack tightly)
-  const ST = 28;                                   // agent record: 28 words (20 + family id, attachment count, 6 partner slots)
+  const ST = 30;                                   // agent record: 30 words (20 + family id, attachment count, 6 partner slots, pigment, padding to a multiple of 8 bytes)
   const SL = 6, LMAX = 40000;
 
   // ---------- parameters (one uniform block, generated from this list so JS and WGSL agree) ----------
@@ -1075,7 +1090,7 @@ struct Agent {
   mem: f32, msg: f32, speak: f32, lastCell: f32,
   age: u32, gen: u32, kind: u32, nh: u32,
   held: u32, alive: u32, kin: u32, lin: i32,
-  nb: u32, bsize: u32, bp: array<u32, ${SL}>,
+  nb: u32, bsize: u32, bp: array<u32, ${SL}>, pig: u32, pad1: u32,
 };
 const NI = ${NI}u; const NH = ${NH}u; const NO = ${NO}u; const NW = ${NW}u;
 @group(0) @binding(0) var<uniform> p: P;
@@ -1083,6 +1098,8 @@ fn hsh(x: u32) -> u32 { var v = x * 747796405u + 2891336453u; v = ((v >> ((v >> 
 fn rnd(a: u32, k: u32) -> f32 { return f32(hsh((a * 9781u) ^ hsh(p.tick * 6271u + k * 31337u + p.seed))) / 4294967296.0; }
 fn gauss(a: u32, k: u32) -> f32 { let u = max(rnd(a, k), 1e-7); let v = rnd(a, k + 977u); return sqrt(-2.0 * log(u)) * cos(6.2831853 * v); }
 fn on(f: u32) -> bool { return (p.flags & f) != 0u; }
+fn psign(k: u32, c: u32) -> f32 { return select(-1.0, 1.0, ((((k * (c * 2u + 3u)) * 2654435761u) >> 28u) & 1u) == 1u); }
+fn pq(p: f32) -> u32 { return u32(round((tanh(clamp(p / 24.0, -9.0, 9.0)) * 0.5 + 0.5) * 255.0)); }
 fn sth(x: f32) -> f32 { return tanh(clamp(x, -12.0, 12.0)); }   // some drivers return NaN from tanh of large inputs
 fn bad(x: f32) -> bool { return (bitcast<u32>(x) & 0x7f800000u) == 0x7f800000u; }
 fn cellOf(x: f32, y: f32) -> u32 { let ix = clamp(i32(floor(x)), 0, i32(p.G) - 1); let iy = clamp(i32(floor(y)), 0, i32(p.G) - 1); return u32(iy) * p.G + u32(ix); }
@@ -1333,7 +1350,9 @@ fn ws(i: u32) -> f32 { return fld[i * 2u + 1u]; }
   }
   ag[ch] = c;
   let pb = i * NW; let cb = ch * NW;
-  for (var w = 0u; w < NW; w++) { var v = W[pb + w]; if (rnd(i, 100u + w) < p.mutP * ${C.MUT}) { v += gauss(i, 2000u + w) * ${C.MUT_SD}; } W[cb + w] = v; }
+  var q0 = 0.0; var q1 = 0.0; var q2 = 0.0;
+  for (var w = 0u; w < NW; w++) { var v = W[pb + w]; if (rnd(i, 100u + w) < p.mutP * ${C.MUT}) { v += gauss(i, 2000u + w) * ${C.MUT_SD}; } W[cb + w] = v; q0 += v * psign(w, 0u); q1 += v * psign(w, 1u); q2 += v * psign(w, 2u); }
+  ag[ch].pig = (pq(q0) << 16u) | (pq(q1) << 8u) | pq(q2);
   atomicAdd(&ctr[1], 1); atomicAdd(&ctr[6], 1);
   if (a.kind == 1u) { atomicAdd(&ctr[8], 1); }
 }`;
@@ -1357,7 +1376,9 @@ fn ws(i: u32) -> f32 { return fld[i * 2u + 1u]; }
   a.lin = -1; let id = atomicAdd(&ctr[10], 1);
   if (id < ${LMAX}) { let o = u32(id) * 4u; lt[o] = -1.0; lt[o + 1u] = a.hue; lt[o + 2u] = f32(p.tick); lt[o + 3u] = f32(p.spawnKind); a.lin = id; } else { atomicSub(&ctr[10], 1); }
   ag[i] = a;
-  let b = i * NW; for (var w = 0u; w < NW; w++) { W[b + w] = gauss(key, 10u + w) * 0.8; }
+  var q0 = 0.0; var q1 = 0.0; var q2 = 0.0;
+  let b = i * NW; for (var w = 0u; w < NW; w++) { let v = gauss(key, 10u + w) * 0.8; W[b + w] = v; q0 += v * psign(w, 0u); q1 += v * psign(w, 1u); q2 += v * psign(w, 2u); }
+  ag[i].pig = (pq(q0) << 16u) | (pq(q1) << 8u) | pq(q2);
 }`;
   // end of step: remember the population for crowding, reset per-step counters
   const finish = common + /* wgsl */`
@@ -1391,11 +1412,12 @@ fn ws(i: u32) -> f32 { return fld[i * 2u + 1u]; }
   const run = (e, name, n) => { const ps = e.beginComputePass(); ps.setPipeline(PP[name]); BG[name].forEach((g, k) => ps.setBindGroup(k, g)); ps.dispatchWorkgroups(Math.ceil(n / 64)); ps.end(); };
 
   // ---------- CPU mirrors (same names as core.js) ----------
+  const pig = new Uint32Array(MAX);
   const alive = new Uint8Array(MAX), px = new Float32Array(MAX), py = new Float32Array(MAX), hue = new Float32Array(MAX), glue = new Float32Array(MAX), energy = new Float32Array(MAX);
   const speak = new Float32Array(MAX), kind = new Uint8Array(MAX), gen = new Uint32Array(MAX), age = new Uint32Array(MAX), nh = new Uint8Array(MAX), held = new Uint8Array(MAX), msg = new Float32Array(MAX), mem = new Float32Array(MAX), kinN = new Uint8Array(MAX);
   const lin = new Int32Array(MAX), nbp = new Uint8Array(MAX), bp = new Int32Array(MAX * SL).fill(-1), bsize = new Uint16Array(MAX).fill(1);
   const linPar = new Int32Array(LMAX), linHue = new Float32Array(LMAX), linBorn = new Int32Array(LMAX), linKind = new Uint8Array(LMAX); let nLin = 0, nLinRead = 0;
-  const food = new Float32Array(CELLS), waste = new Float32Array(CELLS), cap = new Float32Array(CELLS), wall = new Uint8Array(CELLS);
+  const sig = new Float32Array(CELLS), food = new Float32Array(CELLS), waste = new Float32Array(CELLS), cap = new Float32Array(CELLS), wall = new Uint8Array(CELLS);
   for (let y = 0; y < G; y++) for (let x = 0; x < G; x++) if (Math.hypot(x + 0.5 - CX, y + 0.5 - CY) > DR) wall[y * G + x] = 1;
   const BMAX = 120000, bondA = new Int32Array(BMAX), bondB = new Int32Array(BMAX); let nBonds = 0;
   let overflow = 0, pop = 0, tick = 0, births = 0, kills = 0, stung = 0, reintroduced = 0, worldSeed = 0, blobs = [], popPrev = 0;
@@ -1503,7 +1525,7 @@ fn ws(i: u32) -> f32 { return fld[i * 2u + 1u]; }
         const o = i * ST, al = u[o + 17];
         alive[i] = al; if (!al) continue;
         px[i] = f[o]; py[i] = f[o + 1]; energy[i] = f[o + 5]; hue[i] = f[o + 6]; glue[i] = f[o + 7]; mem[i] = f[o + 8]; msg[i] = f[o + 9]; speak[i] = f[o + 10];
-        age[i] = u[o + 12]; gen[i] = u[o + 13]; kind[i] = u[o + 14]; nh[i] = u[o + 15]; held[i] = u[o + 16]; kinN[i] = u[o + 18]; lin[i] = si[o + 19];
+        age[i] = u[o + 12]; gen[i] = u[o + 13]; kind[i] = u[o + 14]; nh[i] = u[o + 15]; held[i] = u[o + 16]; pig[i] = u[o + 28]; kinN[i] = u[o + 18]; lin[i] = si[o + 19];
         const nb = Math.min(SL, u[o + 20]); nbp[i] = nb; for (let q = 0; q < SL; q++) bp[i * SL + q] = q < nb ? u[o + 22 + q] : -1;
         n++; nKind[kind[i]]++;
       }
@@ -1511,7 +1533,7 @@ fn ws(i: u32) -> f32 { return fld[i * 2u + 1u]; }
       const ct = new Int32Array(RB.ctr.getMappedRange()); births = ct[1]; kills = ct[2]; stung = ct[3]; popPrev = Math.max(0, ct[4]); nLin = Math.min(LMAX, ct[10]); overflow = ct[11]; RB.ctr.unmap();
       if (withFields) {
         const fi = new Int32Array(RB.food.getMappedRange()); for (let i = 0; i < CELLS; i++) food[i] = fi[i] / 1000; RB.food.unmap();
-        const wf = new Float32Array(RB.waste.getMappedRange()); for (let i = 0; i < CELLS; i++) waste[i] = wf[i * 2 + 1]; RB.waste.unmap();
+        const wf = new Float32Array(RB.waste.getMappedRange()); for (let i = 0; i < CELLS; i++) { sig[i] = wf[i * 2]; waste[i] = wf[i * 2 + 1]; } RB.waste.unmap();
       }
       pop = n;
       // keep both kinds alive (counted, like the CPU version)
@@ -1578,7 +1600,8 @@ fn ws(i: u32) -> f32 { return fld[i * 2u + 1u]; }
     tick = m.tick; seed = m.seed; worldSeed = m.worldSeed; births = m.births; kills = m.kills; stung = m.stung; reintroduced = m.reintroduced; popPrev = m.popPrev; spawnCount = m.spawnCount || 0;
     blobs = m.blobs.map(b => Object.assign({}, b)); Object.assign(params, m.params); Object.assign(exp, m.exp); buildCap();
     const agU = new Uint32Array(MAX * ST), Wf = new Float32Array(MAX * NW), I = A.idx;
-    for (let j = 0; j < I.length; j++) { agU.set(A.ag.subarray(j * ST, (j + 1) * ST), I[j] * ST); Wf.set(A.W.subarray(j * NW, (j + 1) * NW), I[j] * NW); }
+    const st0 = I.length ? Math.round(A.ag.length / I.length) : ST;   // older saves have 28-word records (no pigment)
+    for (let j = 0; j < I.length; j++) { agU.set(A.ag.subarray(j * st0, j * st0 + Math.min(st0, ST)), I[j] * ST); Wf.set(A.W.subarray(j * NW, (j + 1) * NW), I[j] * NW); }
     Q.writeBuffer(B.ag, 0, agU); Q.writeBuffer(B.prv, 0, agU); Q.writeBuffer(B.W, 0, Wf); Q.writeBuffer(B.fd, 0, A.fd); Q.writeBuffer(B.fld, 0, A.fld); Q.writeBuffer(B.free, 0, A.free); Q.writeBuffer(B.ctr, 0, A.ctr);
     Q.writeBuffer(B.tmp, 0, new Uint8Array(B.tmp.size)); Q.writeBuffer(B.dek, 0, new Uint8Array(B.dek.size));
     const lt = new Float32Array(LMAX * 4); lt.set(A.lt.subarray(0, Math.min(A.lt.length, LMAX * 4))); Q.writeBuffer(B.lt, 0, lt);
@@ -1595,10 +1618,10 @@ fn ws(i: u32) -> f32 { return fld[i * 2u + 1u]; }
   }
   function setCellSize(v) { cs = Math.max(0.5, Math.min(2.5, +v || 1)); }
   return {
-    setPattern, get pattern() { return pattern; }, setCellSize, get cellSize() { return cs; },
+    pig, setPattern, get pattern() { return pattern; }, setCellSize, get cellSize() { return cs; },
     gpu: true, adapterName: (adapter.info && (adapter.info.description || adapter.info.vendor)) || '',
     G, MAX, NI, NH, NO, NW, C, CX, CY, DR, params, exp,
-    alive, px, py, hue, glue, energy, speak, kind, gen, age, nh, held, msg, mem, food, waste, cap, wall, lin, linPar, linHue, linBorn, linKind, bsize,
+    alive, px, py, hue, glue, energy, speak, kind, gen, age, nh, held, msg, mem, food, waste, signal: sig, cap, wall, lin, linPar, linHue, linBorn, linKind, bsize,
     get nLin() { return nLinRead; }, snapshot, restore,
     get pop() { return pop; }, get overflow() { return overflow; }, kinN, get tick() { return tick; }, get seed() { return worldSeed; }, get nBonds() { return nBonds; }, get lost() { return lost; },
     bondA, bondB, orgOf, orgSize, find,
@@ -1719,7 +1742,7 @@ function frame(now) {
   for (let i = 0; i < MAX && k < n; i++) {
     if (!w.alive[i]) continue;
     idx[i] = k; const o = k * 8; data[o + 7] = w.kind[i];
-    data[o] = i; data[o + 1] = w.px[i]; data[o + 2] = w.py[i]; data[o + 3] = w.hue[i]; data[o + 4] = w.glue[i]; data[o + 5] = Math.min(1, w.energy[i] / w.C.REPRO); data[o + 6] = w.speak[i];
+    data[o] = i; data[o + 1] = w.px[i]; data[o + 2] = w.py[i]; data[o + 3] = w.hue[i]; data[o + 4] = w.pig ? w.pig[i] : 0; data[o + 5] = Math.min(1, w.energy[i] / w.C.REPRO); data[o + 6] = w.speak[i];
     k++;
   }
   const nb = w.nBonds, bonds = new Int32Array(nb * 2); let m = 0;
@@ -1743,11 +1766,12 @@ function frame(now) {
     const ev = ch.takeFresh(); if (ev.length) msg.events = ev;
     if (now - lastHist > 1000) { lastHist = now; const h = ch.history(); msg.hist = h; tr.push(h.data.buffer); msg.tree = ch.tree(); }
   }
-  if (now - lastFood > 600) {
+  if (now - lastFood > 350) {
     lastFood = now;
-    const G = w.G, f = new Uint8Array(G * G), wa = new Uint8Array(G * G), cap = w.C.FOOD_CAP, wc = w.C.WASTE_CAP, W_ = w.waste;
+    const G = w.G, f = new Uint8Array(G * G), wa = new Uint8Array(G * G), sg = new Uint8Array(G * G), cap = w.C.FOOD_CAP, wc = w.C.WASTE_CAP, W_ = w.waste, S_ = w.signal;
     for (let i = 0; i < G * G; i++) { f[i] = Math.min(255, w.food[i] / cap * 255); wa[i] = Math.min(255, W_[i] / wc * 255); }
-    msg.food = f; msg.waste = wa; tr.push(f.buffer, wa.buffer);
+    if (S_) for (let i = 0; i < G * G; i++) sg[i] = Math.min(255, S_[i] * 160);
+    msg.food = f; msg.waste = wa; msg.sig = sg; tr.push(f.buffer, wa.buffer, sg.buffer);
   }
   postMessage(msg, tr);
 }
@@ -1864,7 +1888,7 @@ onmessage = async e => {
   function readTheme() {
     const s = getComputedStyle(root);
     for (const k of ['plate', 'food', 'ink', 'dim', 'line', 'surface', 'bg']) T[k] = parse(s.getPropertyValue('--' + k));
-    const S = parseFloat(s.getPropertyValue('--hue-s')) || 0.5, L = parseFloat(s.getPropertyValue('--hue-l')) || 0.4;
+    const S = parseFloat(s.getPropertyValue('--hue-s')) || 0.5, L = parseFloat(s.getPropertyValue('--hue-l')) || 0.4; themeS = S; themeL = L; geneCache.clear();
     for (let h = 0; h < 360; h++) {
       const a = S * Math.min(L, 1 - L), f = n => { const k = (n + h / 30) % 12; return L - a * Math.max(-1, Math.min(k - 3, 9 - k, 1)); };
       hueLUT[h * 3] = f(0) * 255; hueLUT[h * 3 + 1] = f(8) * 255; hueLUT[h * 3 + 2] = f(4) * 255;
@@ -1876,12 +1900,25 @@ onmessage = async e => {
   try { const t = localStorage.getItem('fd-theme'); if (t === 'light' || t === 'dark') root.dataset.theme = t; } catch (e) {}
   mq.addEventListener('change', readTheme);
   const rgb = (c, m = 1) => `rgb(${Math.min(255, c[0] * m) | 0},${Math.min(255, c[1] * m) | 0},${Math.min(255, c[2] * m) | 0})`;
+  // genome colour: the family hue, nudged by three pigment genes read off the cell's brain
+  // (hue shifts up to about 26 degrees, plus richer or paler, lighter or darker); relatives shimmer instead of matching exactly
+  let themeS = 0.5, themeL = 0.4; const geneCache = new Map();
+  function geneParts(h, code) {
+    const t1 = ((code >> 16) & 255) / 127.5 - 1, t2 = ((code >> 8) & 255) / 127.5 - 1, t3 = (code & 255) / 127.5 - 1;
+    return [((h + 26 * t1) % 360 + 360) % 360, Math.min(1, themeS * (0.68 + 0.32 * (t2 * 0.5 + 0.5))), Math.max(0.12, Math.min(0.88, themeL + 0.1 * t3))];
+  }
+  function geneKey(h, code) { const [hh, ss, ll] = geneParts(h, code); return ((hh / 4) | 0) * 100 + Math.round(ss * 9) * 10 + Math.round((ll - 0.12) * 12); }
+  function geneRGB(h, code) {
+    const key = geneKey(h, code); let c = geneCache.get(key); if (c) return c;
+    const [hh, S, L] = geneParts(h, code), a = S * Math.min(L, 1 - L), f = n => { const k = (n + hh / 30) % 12; return L - a * Math.max(-1, Math.min(k - 3, 9 - k, 1)); };
+    c = [f(0) * 255 | 0, f(8) * 255 | 0, f(4) * 255 | 0]; geneCache.set(key, c); return c;
+  }
   const hueRGB = h => { const k = ((h | 0) % 360) * 3; return [hueLUT[k], hueLUT[k + 1], hueLUT[k + 2]]; };
 
   // ---------- worker ----------
   const src = el('coreSrc').textContent;
   const srcURL = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
-  let wk = null, F = null, foodBytes = null, wasteBytes = null, stats = null, selInfo = null, foodDirty = true;
+  let wk = null, F = null, foodBytes = null, wasteBytes = null, sigBytes = null, stats = null, selInfo = null, foodDirty = true;
   let disp = new Float32Array(9000 * 2).fill(NaN);
   let pendingLoad = null, firstFrame = false;
   function onWorker(e) {
@@ -1902,7 +1939,7 @@ onmessage = async e => {
     if (m.events) addEvents(m.events);
     if (m.hist) { hist = m.hist; histDirty = true; }
     if (m.tree) { tree = m.tree; histDirty = true; }
-    if (m.food) { foodBytes = m.food; wasteBytes = m.waste; foodDirty = true; }
+    if (m.food) { foodBytes = m.food; wasteBytes = m.waste; sigBytes = m.sig || null; foodDirty = true; }
     if (m.stats) { stats = m.stats; showStats(); }
     if (m.sel) { selInfo = m.sel; showSel(); }
   }
@@ -2138,7 +2175,7 @@ onmessage = async e => {
     x.lineCap = 'round'; x.lineWidth = sc * 0.34;
     for (let b = 0; b < B.length; b += 2) {
       if (!near(B[b])) continue;
-      const sa = D[B[b] * 8], sb = D[B[b + 1] * 8], c = hueRGB(D[B[b] * 8 + 3]);
+      const sa = D[B[b] * 8], sb = D[B[b + 1] * 8], c = geneRGB(D[B[b] * 8 + 3], D[B[b] * 8 + 4]);
       x.strokeStyle = D[B[b] * 8 + 7] === 1 ? rgb(T.ink) : (dark ? rgb(c, 0.75) : rgb(c, 0.8)); x.globalAlpha = 0.8;
       x.beginPath(); x.moveTo(X(disp[sa * 2]), Y(disp[sa * 2 + 1])); x.lineTo(X(disp[sb * 2]), Y(disp[sb * 2 + 1])); x.stroke();
     }
@@ -2148,8 +2185,8 @@ onmessage = async e => {
       if (!near(j)) continue;
       const o = j * 8, s0 = D[o], cx = X(disp[s0 * 2]), cy = Y(disp[s0 * 2 + 1]);
       if (D[o + 7] === 1) { x.strokeStyle = rgb(T.ink); x.lineWidth = sc * 0.18; x.beginPath(); x.arc(cx, cy, sc * 0.5, 0, 6.2832); x.stroke(); continue; }
-      if (look === 'phase') { const sz = sc * (1.25 + D[o + 5] * 0.3); x.drawImage(phaseSprite(D[o + 3], dark), cx - sz / 2, cy - sz / 2, sz, sz); continue; }
-      const c = hueRGB(D[o + 3]), rr = sc * (0.44 + D[o + 5] * 0.14);
+      if (look === 'phase') { const sz = sc * (1.25 + D[o + 5] * 0.3); x.drawImage(phaseSprite(geneParts(D[o + 3], D[o + 4])[0], dark), cx - sz / 2, cy - sz / 2, sz, sz); continue; }
+      const c = geneRGB(D[o + 3], D[o + 4]), rr = sc * (0.44 + D[o + 5] * 0.14);
       const g = x.createRadialGradient(cx - rr * 0.25, cy - rr * 0.3, rr * 0.1, cx, cy, rr);
       g.addColorStop(0, rgb(c, dark ? 1.35 : 1.25)); g.addColorStop(0.7, rgb(c, dark ? 1 : 0.85)); g.addColorStop(1, rgb(c, dark ? 0.7 : 0.6));
       x.fillStyle = g; x.beginPath(); x.arc(cx, cy, rr, 0, 6.2832); x.fill();
@@ -2212,10 +2249,13 @@ onmessage = async e => {
     const p = dark && look === 'phase' ? [34, 38, 41] : look === 'phase' ? [146, 152, 155] : T.plate;
     const f = look === 'phase' ? (dark ? [70, 78, 82] : [96, 102, 106]) : T.food, d = foodImg.data;
     const wc = look === 'phase' ? (dark ? [20, 22, 24] : [104, 108, 110]) : (dark ? [58, 44, 26] : [150, 124, 84]);
+    const sc = dark ? [150, 110, 235] : [120, 80, 190];
     for (let i = 0; i < G * G; i++) {
       const v = foodBytes[i] / 255, t = v * v * (dark ? 0.85 : 0.66);
       let r = p[0] + (f[0] - p[0]) * t, g = p[1] + (f[1] - p[1]) * t, b = p[2] + (f[2] - p[2]) * t;
       if (wasteBytes) { const u = Math.min(1, wasteBytes[i] / 255 * 1.6) * 0.7; r += (wc[0] - r) * u; g += (wc[1] - g) * u; b += (wc[2] - b) * u; }
+      // calls: the signal cells send through the jelly, shown as a soft glow
+      if (sigBytes && sigBytes[i]) { const u = Math.min(1, sigBytes[i] / 255) * (dark ? 0.55 : 0.4); r += (sc[0] - r) * u; g += (sc[1] - g) * u; b += (sc[2] - b) * u; }
       d[i * 4] = r; d[i * 4 + 1] = g; d[i * 4 + 2] = b; d[i * 4 + 3] = 255;
     }
     foodX.putImageData(foodImg, 0, 0); foodDirty = false;
@@ -2268,21 +2308,21 @@ onmessage = async e => {
       const P = pig.width / cw, pk = k * P, px = x => toSX(x) * P, py = y => toSY(y) * P;
       pigX.setTransform(1, 0, 0, 1, 0, 0); pigX.clearRect(0, 0, pig.width, pig.height);
       const paths = new Map();
-      const pathFor = h => { const key = (h / 6) | 0; let p = paths.get(key); if (!p) { p = { c: new Path2D(), l: new Path2D(), h: key * 6 + 3 }; paths.set(key, p); } return p; };
+      const pathFor = (h, code) => { const key = geneKey(h, code); let p = paths.get(key); if (!p) { p = { c: new Path2D(), l: new Path2D(), rgb: geneRGB(h, code) }; paths.set(key, p); } return p; };
       for (let j = 0; j < n; j++) {
         if (!vis(j)) continue;
         if (D[j * 8 + 7] === 1) continue;
-        const o = j * 8, s = D[o], x = px(disp[s * 2]), y = py(disp[s * 2 + 1]), r = pk * (0.42 + D[o + 5] * 0.16), p = pathFor(D[o + 3]);
+        const o = j * 8, s = D[o], x = px(disp[s * 2]), y = py(disp[s * 2 + 1]), r = pk * (0.42 + D[o + 5] * 0.16), p = pathFor(D[o + 3], D[o + 4]);
         p.c.moveTo(x + r, y); p.c.arc(x, y, r, 0, 6.2832);
       }
       for (let b = 0; b < B.length; b += 2) {
         if (D[B[b] * 8 + 7] === 1) continue;
-        const sa = D[B[b] * 8], sb = D[B[b + 1] * 8], p = pathFor(D[B[b] * 8 + 3]);
+        const sa = D[B[b] * 8], sb = D[B[b + 1] * 8], p = pathFor(D[B[b] * 8 + 3], D[B[b] * 8 + 4]);
         p.l.moveTo(px(disp[sa * 2]), py(disp[sa * 2 + 1])); p.l.lineTo(px(disp[sb * 2]), py(disp[sb * 2 + 1]));
       }
       pigX.lineCap = 'round'; pigX.lineWidth = Math.max(1, pk * 0.62);
       for (const p of paths.values()) {
-        const c = hueRGB(p.h), col = dark ? rgb(c, 0.62) : rgb(c, 0.82);
+        const c = p.rgb, col = dark ? rgb(c, 0.62) : rgb(c, 0.82);
         pigX.fillStyle = col; pigX.fill(p.c); pigX.strokeStyle = col; pigX.stroke(p.l);
       }
       const mode = dark ? 'lighter' : 'multiply';
@@ -2298,7 +2338,7 @@ onmessage = async e => {
         if (!vis(j)) continue;
         if (D[j * 8 + 7] === 1) continue;
         const o = j * 8, s = D[o], sz = k * (1.25 + D[o + 5] * 0.3);
-        ctx.drawImage(phaseSprite(D[o + 3], dark), toSX(disp[s * 2]) - sz / 2, toSY(disp[s * 2 + 1]) - sz / 2, sz, sz);
+        ctx.drawImage(phaseSprite(geneParts(D[o + 3], D[o + 4])[0], dark), toSX(disp[s * 2]) - sz / 2, toSY(disp[s * 2 + 1]) - sz / 2, sz, sz);
       }
     }
     // hunters: hollow rings, a different kind of life from the colour-filled grazers
